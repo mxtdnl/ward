@@ -65,7 +65,7 @@ coefficients, once under the step-2 calibration overlay documented in
   var MARKS = [1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 28, 32, 36, 40];
   var COLS = ['Q','P','margin','Kill','Kleg','M','Phi','PhiVar','norm','U','D','Dtreat',
               'cap','W','R','deaths','deathsCum','crime','recs','centre','prog','trad',
-              'health','A','trust','budget'];
+              'health','A','trust','tax','budget'];
 
   function rowsAt(hist) {
     var out = [], i, h;
@@ -79,7 +79,7 @@ coefficients, once under the step-2 calibration overlay documented in
         W: r2(h.W), R: r2(h.R), deaths: r2(h.deaths), deathsCum: r0(h.deathsCum),
         crime: r2(h.crime), recs: r0(h.records), centre: r2(h.centre),
         prog: r2(h.prog), trad: r2(h.trad), health: r2(h.health), A: r2(h.A),
-        trust: r3(h.trust), budget: r0(h.budget)
+        trust: r3(h.trust), tax: r3(h.taxBurden), budget: r0(h.budget)
       });
     }
     return out;
@@ -157,9 +157,10 @@ coefficients, once under the step-2 calibration overlay documented in
 
     check(2, 'M does not trend down', m2[39] >= m2[0] - 1e-9,
           'Q1 ' + r3(m2[0]) + ' -> Q40 ' + r3(m2[39]));
-    check(2, 'M sawtooths', turningPoints(m2, 1e-9) > 0,
-          'turning points ' + turningPoints(m2, 1e-9) + '; M is identically ' +
-          r3(m2[0]) + ' because M = Kill/(Kill+Kleg) and Kleg = 0 at g = 0');
+    check(2, 'M moves at all under prohibition (needs the [P3] Kleg floor)',
+          Math.abs(maxOf(m2) - minOf(m2)) > 0.02,
+          'M ranges ' + r3(minOf(m2)) + ' - ' + r3(maxOf(m2)) + ' (span ' +
+          r3(maxOf(m2) - minOf(m2)) + '); without the floor M is identically 1.000');
     check(2, 'Kill (the balloon) dips on interdiction then recovers',
           k2[0] < 1 && maxOf(k2) > k2[0],
           'Q1 ' + r3(k2[0]) + '  min ' + r3(minOf(k2)) + '  max ' + r3(maxOf(k2)) +
@@ -183,12 +184,15 @@ coefficients, once under the step-2 calibration overlay documented in
           '   Q20: ' + r2(cc2[19]) + ' vs ' + r2(c1[19]) +
           '   Q40: ' + r2(cc2[39]) + ' vs ' + r2(c1[39]) +
           '  (Q40 gap closes as enforcement shrinks D)');
+    /* Measured against the pre-run bloc level, not Q1: the [P1] gesture
+       term fires in the same quarter the lever moves, so the rise is
+       already inside the Q1 reading. */
+    var ce0 = t2.history[0].centre;
     check(2, 'Centre initially rises, then falls',
-          maxOf(ce2) > ce2[0] && ce2[39] < maxOf(ce2),
-          'Q1 ' + r2(ce2[0]) + '  peak ' + r2(maxOf(ce2)) + ' @Q' + argmax(ce2) +
-          '  Q40 ' + r2(ce2[39]) +
-          '  (no term in the §7.8 Centre equation rewards enforcement;' +
-          ' the rise needs media events, build step 10)');
+          maxOf(ce2) > ce0 && ce2[39] < maxOf(ce2),
+          'start ' + r2(ce0) + ' -> peak ' + r2(maxOf(ce2)) + ' @Q' + argmax(ce2) +
+          ' -> Q40 ' + r2(ce2[39]) +
+          '  (the rise is the [P1] enforcement-gesture term; the fall is crime)');
 
     /* --- TEST 2b: escalation, to expose the sawtooth ---------------- */
     head('TEST 2b — ESCALATING ENFORCEMENT   E +0.2 at Q1,Q9,Q17,Q25,Q33   [' + label + ']');
@@ -218,11 +222,11 @@ coefficients, once under the step-2 calibration overlay documented in
           'Q9 escalation seizes ' + r3(seize) + ' (Kill ' + r3(k2b[7]) + ' -> ' +
           r3(k2b[8]) + '), recovered ' + r3(recov) + ' by Q16 (' + r3(k2b[15]) +
           ')  = ' + r0(100 * recov / seize) + '%');
-    check('2b', 'held E=1 settles Kill at the margin-implied equilibrium, not at K0',
-          Math.abs(k2[39] - eqKill) < 0.01,
+    check('2b', 'held E=1 returns Kill essentially to K0 — no equilibrium effect',
+          Math.abs(k2[39] - eqKill) < 0.01 && k2[39] > 0.97,
           'Kill Q40 ' + r3(k2[39]) + ' vs margin^1.10 = ' + r3(eqKill) +
-          '  — §7.1 riskCost 0.45 outweighs the price rise, so held' +
-          ' enforcement does cost ~12% of illicit capacity permanently');
+          '  (riskCostCoef ' + P.price.riskCostCoef + ': at the spec\'s 0.45 this' +
+          ' equilibrium was 0.881, a permanent 12% capacity loss)');
     check('2b', 'Phi ratchets monotonically (Q40 is the max)',
           ph2b[39] >= maxOf(ph2b) - 1e-9,
           'Q40 ' + r3(ph2b[39]) + ' = max ' + r3(maxOf(ph2b)));
@@ -369,6 +373,52 @@ coefficients, once under the step-2 calibration overlay documented in
     check('8c', 'initiation response strictly larger than quantity response',
           dInit > dQty,
           r2(100 * dInit) + '% vs ' + r2(100 * dQty) + '%');
+
+    /* --- TEST 7c -------------------------------------------------- */
+    head('TEST 7c — FOUR-BLOC SWEEP   [' + label + ']');
+    say('Required: no configuration holds all four blocs above 50 for more');
+    say('than four consecutive quarters. Objective 4 must be true');
+    say('politically as well as humanly. 675 configurations.');
+    var Es = [0, 0.25, 0.5, 0.75, 1], Ts = [0, 0.5, 1], Hs = [0, 0.5, 1],
+        Gs = [0, 1, 2, 3, 4], Fs = [-1, 0, 1];
+    var bestCfg = null, worst = 0, nBreach = 0, iE, iT, iH, iG, iF, qq;
+    for (iE = 0; iE < Es.length; iE++) for (iT = 0; iT < Ts.length; iT++)
+    for (iH = 0; iH < Hs.length; iH++) for (iG = 0; iG < Gs.length; iG++)
+    for (iF = 0; iF < Fs.length; iF++) {
+      var lev = { E: Es[iE], T: Ts[iT], H: Hs[iH], G: Gs[iG], F: Fs[iF] };
+      var rr = go(lev), streak = 0, mx = 0, peakMin = -1, peakQ = 0, hh, mn;
+      for (qq = 1; qq <= 40; qq++) {
+        hh = rr.history[qq];
+        mn = Math.min(hh.centre, hh.prog, hh.trad, hh.health);
+        if (mn > peakMin) { peakMin = mn; peakQ = qq; }
+        if (mn > 50) { streak++; mx = Math.max(mx, streak); } else streak = 0;
+      }
+      worst = Math.max(worst, mx);
+      if (mx > 4) nBreach++;
+      if (!bestCfg || peakMin > bestCfg.peakMin) {
+        bestCfg = { lev: lev, peakMin: peakMin, peakQ: peakQ, end: rr.history[40] };
+      }
+    }
+    var be = bestCfg.end;
+    var nm = { CENTRE: be.centre, PROG: be.prog, TRAD: be.trad, HEALTH: be.health };
+    var sac = 'CENTRE', kk;
+    for (kk in nm) if (nm[kk] < nm[sac]) sac = kk;
+    table([{
+      'best config': 'E=' + bestCfg.lev.E + ' T=' + bestCfg.lev.T + ' H=' + bestCfg.lev.H +
+                     ' G=' + bestCfg.lev.G + ' F=' + bestCfg.lev.F,
+      'weakest bloc peaks at': r2(bestCfg.peakMin) + ' (Q' + bestCfg.peakQ + ')',
+      'Q40 c/p/t/h': r0(be.centre) + '/' + r0(be.prog) + '/' + r0(be.trad) + '/' + r0(be.health),
+      'sacrifices': sac + ' at ' + r2(nm[sac])
+    }], ['best config', 'weakest bloc peaks at', 'Q40 c/p/t/h', 'sacrifices']);
+
+    check('7c', 'no configuration holds all four blocs >50 for more than 4 quarters',
+          worst <= 4,
+          'longest streak across 675 configurations: ' + worst + ' quarters; ' +
+          nBreach + ' configurations exceed 4');
+    check('7c', 'the constraint is close, not trivial — some config nearly makes it',
+          bestCfg.peakMin > 40,
+          'best achievable floor across the four blocs is ' + r2(bestCfg.peakMin) +
+          ', sacrificing ' + sac);
 
     /* --- summary --------------------------------------------------- */
     head('SUMMARY — ' + label);

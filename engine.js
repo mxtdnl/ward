@@ -10,6 +10,14 @@
  * (step 7), no media events (step 10). Those are later checkpoints.
  *
  * EVERY coefficient lives in PARAMS below. Nothing numeric outside it.
+ *
+ * Entries marked [P1]..[P5] are the v2.1 revisions, each documented in
+ * place and mirrored into ward-handoff-spec-v2.md:
+ *   [P1] §7.8 rewritten as partial adjustment to a target
+ *   [P2] the fiscal channel — treatment's political opponent
+ *   [P3] riskCost and the Kleg floor
+ *   [P4] lever costs doubled so the budget envelope binds
+ *   [P5] spec/equation disagreements reconciled
  * ===================================================================== */
 
 (function (root) {
@@ -41,14 +49,14 @@
       Phi0: 1.00,                        // [SPEC §6] potency base
       norm0: 1.00,                       // [SPEC §6] normalisation base
       K0: 1.00,                          // [SPEC §7.2] reference capacity
-      Kleg0: 0.00,                       // no legal supply under prohibition
+      Kleg0: 0.20,                       // = capacity.legalFloor; licit supply at g=0
       margin0: 1.00,                     // [SPEC §7.1] margin at E=0, g=0, P=100
       trust0: 0.50,
       S0: 0.10,                          // media salience
       budget0: 0,
       incarcerated0: 0,
       records0: 0,
-      blocs0: { centre: 55, prog: 55, trad: 55, health: 55 }
+      blocs0: { centre: 52, prog: 50, trad: 44, health: 50 }  // = blocs.base
     },
 
     /* --- §7.1 price and margin ------------------------------------- */
@@ -59,7 +67,14 @@
       capacityExp: 0.35,                 // (K0/max(Kill+Kleg,0.2))^0.35
       capacityFloor: 0.20,
       adjust: 0.25,                      // P += 0.25·(P* − P)
-      riskCostCoef: 0.45                 // riskCost = 0.45·E·(1−g)
+      /* [P3] 0.45 -> 0.32. At 0.45 the equilibrium margin under held E=1
+         is 0.891, so Kill settles at 0.881 and enforcement permanently
+         removes ~12% of illicit capacity — contradicting §7.2's claim
+         that level enforcement has no equilibrium effect. 0.32 puts
+         equilibrium Kill at 0.991, i.e. the seized capacity comes back
+         essentially in full. Costs almost nothing elsewhere: Q8 crime
+         under maximum enforcement moves only 129.5 -> 128.4. */
+      riskCostCoef: 0.32                 // riskCost = 0.32·E·(1−g)
     },
 
     /* --- §7.2 illicit / legal capacity ----------------------------- */
@@ -68,9 +83,16 @@
       illicitAdjust: 0.22,               // entry/exit lag ≈ 4-6 quarters
       interdictionCoef: 0.34,            // 0.34·max(0,ΔE)·Kill
       illicitFloor: 0.05,
-      legalTarget: 1.15,                 // Kleg* = 1.15·g^0.85
+      legalTarget: 1.15,                 // Kleg* = 1.15·g^0.85 + legalFloor
       legalExp: 0.85,
       legalAdjust: 0.14,                 // deliberately slower than 0.22
+      /* [P3] Without a floor, Kleg = 0 under prohibition, so
+         M = Kill/(Kill+Kleg) is identically 1.000 and the balloon is
+         invisible on the variable §7.2 puts it on. A licit supply does
+         exist under prohibition — Gareth is on prescribed
+         benzodiazepines, Tomas moved to illicit supply *from* a
+         prescription. 0.20 gives M a legible sawtooth under enforcement. */
+      legalFloor: 0.20,
       shareFloor: 0.05                   // M = Kill/max(Kill+Kleg, 0.05)
     },
 
@@ -150,17 +172,58 @@
       recordsCoef: 0.9, recordsRate: 0.006
     },
 
-    /* --- §7.8 constituencies --------------------------------------- */
+    /* --- §7.8 constituencies --------------------------------------- *
+     * [P1] Rewritten as partial adjustment toward a target, which is the
+     * form §7 uses for every other variable and which §7's opening line
+     * requires. As written in the spec the blocs INTEGRATE a flow with no
+     * equilibrium, so any sustained condition drives them to 0 or 100 and
+     * parks them: under the spec's own Δcentre, held enforcement runs
+     * -0.070·(crime-100) = -2.75/quarter for thirty quarters and nothing
+     * can arrest it. Every level coefficient below is a target offset in
+     * bloc points; the Δ terms that survive are genuine shocks (a lever
+     * moved, a coherence breach) and are applied on top.               */
     blocs: {
       weights: { centre: 0.38, prog: 0.24, trad: 0.22, health: 0.16 },
-      centre: { crime: 0.070, deficit: 0.045, event: 0.9 },
-      prog:   { deaths: 0.050, salienceFloor: 0.4, salienceCoef: 0.6,
-                incarc: 0.030, records: 0.025, dG: 0.060, dE: 0.070 },
-      trad:   { crime: 0.050, dG: 0.130, dH: 0.060,
-                moralFrame: 0.070, prevalence: 0.040 },
-      health: { deaths: 0.060, dW: 0.045, dT: 0.055,
-                medicalFrame: 0.050, punitive: 0.060 },
+      adjust: 0.15,                      // all four blocs relax at this rate
+
+      /* Bases differ. Objective 4 requires incompatible ideal points: if
+         every bloc's target sits at the same neutral base, the moderate
+         configuration is near everyone's optimum and Test 7c cannot pass
+         at any coefficient setting (verified over a 675-point sweep).
+         §3's own header sketch shows CENTRE 44 · PROG 61 · TRAD 22 ·
+         HEALTH 58, i.e. a wide spread, so a spread is intended.        */
+      base: { centre: 52, prog: 50, trad: 44, health: 50 },
+
+      /* deathsRef is an ASPIRATION, not the status quo. Anchored at the
+         achievable baseline instead, the status quo satisfies Progressive
+         and Health by construction and objective 4 fails politically. */
+      deathsRef: 40,
+
+      centre: { crime: 0.30, deficit: 0.10, tax: 0.34, event: 0.9,
+                gesture: 3.5 },
+      prog:   { deaths: 0.09, salienceFloor: 0.4, salienceCoef: 0.6,
+                records: 0.60, g: 3.0, enf: 14, frame: 9.0, tax: 0.06,
+                dG: 0.060, dE: 0.070 },
+      trad:   { crime: 0.20, g: 30, harm: 12, frame: 7.0, prevalence: 0.50,
+                tax: 0.30, gesture: 4.0, dG: 0.130 },
+      health: { deaths: 0.12, wait: 0.20, treat: 10, frame: 6.0, enf: 8,
+                tax: 0.07, punitive: 0.060 },
       min: 0, max: 100
+    },
+
+    /* --- [P2] the fiscal channel ----------------------------------- *
+     * Treatment had no political opponent anywhere in §7.8: no bloc
+     * carried a negative T term, so no coefficient could make it cost
+     * anything and the moderate-treatment configuration satisfied all
+     * four blocs indefinitely. The opponent is fiscal rather than
+     * ideological — programme spending is funded from taxation, and the
+     * tax burden is felt by the blocs that care about the fiscal
+     * position. This also makes §5's budget envelope bind, which it
+     * previously never did.                                            */
+    tax: {
+      sensitivity: 0.50,   // taxBurden* = 1 + 0.50·(spend / perQuarter)
+      adjust: 0.12,        // [POL] a tax rise is felt with a lag
+      base: 1.00           // index, 1.00 = the status quo take
     },
 
     /* --- §7.9 trust ------------------------------------------------ */
@@ -175,12 +238,23 @@
     /* --- §4.1 / §5 budget and lever costs -------------------------- */
     budget: {
       perQuarter: 220,
-      enfCost: 40,                       // 40·E
-      trtCost: 55,                       // 55·T
-      harmCost: 15,                      // 15·H
+      /* [P4] Lever costs doubled. At the spec's 40/55/15 every lever at
+         maximum costs 110 against an envelope of 220, so the class can
+         run maximum treatment, maximum harm reduction and the medicalised
+         frame at once and still bank a surplus — Test 3 finished at
+         +6,600. Scarcity is meant to be one of the forces creating the
+         trade-off and it was not one. Doubled, max-all is exactly 220. */
+      enfCost: 80,                       // 80·E
+      trtCost: 110,                      // 110·T
+      harmCost: 30,                      // 30·H
       regRevenue: 30,                    // −30·g·(U/U0) net
       regSetup: 120,                     // one-off at each tier increase
-      incarcerationUnitCost: 0.9,        // [BUILD] cost per incarcerated head
+      /* [BUILD, corrected] 0.9 was mis-scaled by ~45x: the incarcerated
+         stock equilibrates near 2,450 under E=1, so 0.9/head charged
+         2,200 per quarter against a 220 envelope and drove the maximum-
+         enforcement run to -54,801. §5 puts incarceration cost alongside
+         40·E, i.e. tens per quarter, not thousands. 0.02 gives ~49. */
+      incarcerationUnitCost: 0.02,       // cost per incarcerated head
       deficitFloor: -400,                // beyond which coalition compounds
       deficitPenalty: 0.010              // [BUILD] per 100 below the floor, per bloc
     },
@@ -291,7 +365,7 @@
       PhiVar: P.potency.varBase * i.Phi0,
       margin: i.margin0,
       Kill: i.K0,
-      Kleg: i.Kleg0,
+      Kleg: i.Kleg0,                     // [P3] licit supply exists at g=0
       M: i.K0 / Math.max(i.K0 + i.Kleg0, P.capacity.shareFloor),
       norm: i.norm0,
 
@@ -317,6 +391,7 @@
       S: i.S0,
       trust: i.trust0,
       budget: i.budget0,
+      taxBurden: P.tax.base,             // [P2]
 
       forecasts: [],
       people: [],                        // step 7
@@ -406,7 +481,7 @@
     st.Kill = Math.max(st.Kill, pc.illicitFloor);
     st._interdiction = interdiction;
 
-    var KlegStar = pc.legalTarget * Math.pow(g, pc.legalExp);
+    var KlegStar = pc.legalTarget * Math.pow(g, pc.legalExp) + pc.legalFloor;
     st.Kleg += pc.legalAdjust * (KlegStar - st.Kleg);
 
     st.M = st.Kill / Math.max(st.Kill + st.Kleg, pc.shareFloor);
@@ -532,34 +607,69 @@
     st._cost = cost;
     st.budget += bg.perQuarter - cost;
 
+    /* --- [P2] tax burden ------------------------------------------- *
+     * Programme spending is funded from taxation. The burden is an index
+     * on the status quo take and is felt with a lag.                   */
+    var tx = P.tax;
+    var taxStar = tx.base + tx.sensitivity * (Math.max(0, cost) / bg.perQuarter);
+    st.taxBurden += tx.adjust * (taxStar - st.taxBurden);
+    var taxPts = (st.taxBurden - tx.base) * 100;   // burden in index points
+
     /* ============================================================== *
      * 10. Constituencies and approval (§7.8)                          */
     var pb = P.blocs;
     var eventImpact = 0;                 // media events are step 10
     var punitiveGesture = 0;             // ditto
-    var dDeaths = st.deathsPrev - st.deaths;
-    var dW = st.W - Wprev;
 
-    var dCentre = -pb.centre.crime * (st.crime - cr.base)
+    /* [P1] Each bloc has a target; the bloc relaxes toward it. Frame
+       terms are symmetric in F — the spec rewarded a bloc's preferred
+       frame but never penalised the opposite one, so F cost nobody
+       anything. [P5] Progressive gains the F term §7.8's own table
+       requires ("hostile to ... moralised frame") and the equation
+       omitted. [P2] every bloc carries a tax term. */
+    var tCentre = pb.base.centre
+      - pb.centre.crime * (st.crime - cr.base)
       - pb.centre.deficit * Math.max(0, -st.budget / 100)
+      - pb.centre.tax * taxPts;
+
+    var tProg = pb.base.prog
+      + pb.prog.deaths * (pb.deathsRef - st.deaths)
+        * (pb.prog.salienceFloor + pb.prog.salienceCoef * st.S)
+      - pb.prog.records * (st.records / 1000)
+      + pb.prog.g * g
+      - pb.prog.enf * E
+      + pb.prog.frame * F
+      - pb.prog.tax * taxPts;
+
+    var tTrad = pb.base.trad
+      - pb.trad.crime * (st.crime - cr.base)
+      - pb.trad.g * g
+      - pb.trad.harm * H
+      - pb.trad.frame * F
+      - pb.trad.prevalence * (st.U / ref.U0 - 1) * 100
+      - pb.trad.tax * taxPts;
+
+    var tHealth = pb.base.health
+      + pb.health.deaths * (pb.deathsRef - st.deaths)
+      - pb.health.wait * st.W
+      + pb.health.treat * T
+      + pb.health.frame * F
+      - pb.health.enf * E
+      - pb.health.tax * taxPts;
+
+    /* Shocks applied on top of the relaxation: a lever moved (the
+       announcement, not the level), and the enforcement gesture that
+       §12 says buys Centre and Traditional support immediately. */
+    var ad = pb.adjust;
+    var dCentre = ad * (tCentre - st.blocs.centre)
+      + pb.centre.gesture * Math.max(0, dE) * (1 + st.S)
       - eventImpact * (1 + st.S) * pb.centre.event;
-
-    var dProg = pb.prog.deaths * dDeaths * (pb.prog.salienceFloor + pb.prog.salienceCoef * st.S)
-      - pb.prog.incarc * dIncarc
-      - pb.prog.records * recordsIn
-      + pb.prog.dG * dG
-      - pb.prog.dE * dE;
-
-    var dTrad = -pb.trad.crime * (st.crime - cr.base)
-      - pb.trad.dG * dG
-      - pb.trad.dH * dH
-      + pb.trad.moralFrame * (F === -1 ? 1 : 0)
-      - pb.trad.prevalence * (st.U / ref.U0 - 1) * 100;
-
-    var dHealth = pb.health.deaths * dDeaths
-      - pb.health.dW * dW
-      + pb.health.dT * dT
-      + pb.health.medicalFrame * (F === 1 ? 1 : 0)
+    var dProg = ad * (tProg - st.blocs.prog)
+      + pb.prog.dG * dG - pb.prog.dE * dE;
+    var dTrad = ad * (tTrad - st.blocs.trad)
+      + pb.trad.gesture * Math.max(0, dE) * (1 + st.S)
+      - pb.trad.dG * dG;
+    var dHealth = ad * (tHealth - st.blocs.health)
       - pb.health.punitive * punitiveGesture;
 
     /* coherence penalty applies to every constituency (§5) */
@@ -634,7 +744,8 @@
       crime: st.crime, incarcerated: st.incarcerated, records: st.records,
       centre: st.blocs.centre, prog: st.blocs.prog,
       trad: st.blocs.trad, health: st.blocs.health,
-      A: st.A, trust: st.trust, budget: st.budget, S: st.S
+      A: st.A, trust: st.trust, budget: st.budget, S: st.S,
+      taxBurden: st.taxBurden, cost: st._cost
     };
   }
 
