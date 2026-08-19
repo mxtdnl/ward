@@ -1,19 +1,23 @@
 /* =====================================================================
  * WARD — Region of Alder
- * Build-order steps 1-3, 7 and 8: PARAMS, state object, partial-
+ * Build-order steps 1-3, 6, 7 and 8: PARAMS, state object, partial-
  * adjustment engine with the fixed evaluation order of §7, the
- * 40-quarter loop, the twelve named individuals (§9), and the four
- * constituencies with the readings the coalition strip is built from
- * (§7.8, §10).
+ * 40-quarter loop, the delayed-consequence queue with its disciplinary
+ * tagging and the amber rule (§8), the twelve named individuals (§9),
+ * and the four constituencies with the readings the coalition strip is
+ * built from (§7.8, §10).
  *
  * A model, not a forecast. Every relationship here is simplified;
  * every number is invented.
  *
- * No UI, no rendering, no delayed-effect queue (step 6), no media
- * events (step 10). Steps 7 and 8 are present only in their headless
- * parts: the per-person model and the bloc readings, not the portrait
- * moments, the trace bank or the disciplinary lens, all of which need
- * step 4's canvas.
+ * No UI, no rendering, no media events (step 10). Steps 6, 7 and 8 are
+ * present in their headless parts: the queue, the chains and the amber
+ * marks as data; the per-person model; the bloc readings; and the
+ * disciplinary lens as the mapping and the cycle §4.3's D key drives.
+ * The rendering of all of it — the trace bank, the portrait moments,
+ * the pinned chain block, the C overlay — needs step 4's canvas.
+ * harness-chains.html renders enough of the Read phase to exercise the
+ * amber marks, the pinned chain and the lens.
  *
  * EVERY coefficient lives in PARAMS below. Nothing numeric outside it.
  *
@@ -252,6 +256,13 @@
       min: 0, max: 1
     },
 
+    /* --- §5 lever ranges ------------------------------------------- *
+     * The detent bounds of the five levers, so §8's counterfactual can
+     * subtract a decision's own move and still land inside the range.  */
+    levers: {
+      range: { E: [0, 1], T: [0, 1], H: [0, 1], G: [0, 4], F: [-1, 1] }
+    },
+
     /* --- §4.1 / §5 budget and lever costs -------------------------- */
     budget: {
       perQuarter: 220,
@@ -288,6 +299,268 @@
 
     /* --- §12 salience ---------------------------------------------- */
     salience: { decay: 0.75 },
+
+
+    /* --- §8 the delayed-consequence engine ------------------------- *
+     * Build-order step 6. The queue is an ATTRIBUTION LEDGER, not a
+     * second set of forces. §7 already contains every mechanism in the
+     * model, so an entry that carried a magnitude of its own would
+     * double-count one of them. A queue entry therefore carries the
+     * decision, the target, the fire quarter and the causal chain, and
+     * its magnitude is RESOLVED at the fire quarter from the model's
+     * own counterfactual: the difference between this run and a shadow
+     * run in which that one lever change never happened. No coefficient
+     * is invented to size an effect, and the amber rule reads a real
+     * quantity rather than a stipulated one.                          */
+    delayed: {
+      track: true,             // [BUILD] off for grid sweeps that read outcomes only
+      amberShare: 0.40,        // [SPEC §8.1] >= 40% of this quarter's change...
+      amberLag: 3,             // ...from effects originating >= 3 quarters ago
+      noiseFloor: 0.0005,      // |Δv| below this fraction of |v| is not a change
+      noiseRef: 1,             // ...and |v| below this counts as this, so a
+                               //    reading near zero cannot go amber on dust
+      marker: '▸',        // [SPEC §2.2] the leading ▸ an amber value takes
+      /* The readings the amber rule is evaluated over: §3's instrument
+         bank and market schematic, plus §7.8's coalition strip. */
+      readings: ['P', 'margin', 'Kill', 'Kleg', 'M', 'Phi', 'PhiVar', 'norm',
+                 'U', 'D', 'Dtreat', 'W', 'R', 'deaths', 'crime',
+                 'incarcerated', 'records', 'trust', 'budget', 'taxBurden',
+                 'centre', 'prog', 'trad', 'health', 'A']
+    },
+
+    /* --- §4.3 the disciplinary lens -------------------------------- */
+    lens: {
+      dimOpacity: 0.35,        // [SPEC §4.3] readings not owned by the adviser
+      order: ['all', 'PSY', 'ECO', 'POL']   // D cycles; the fourth press is `all`
+    },
+
+    /* --- §5 lever names, for the causal strings -------------------- */
+    labels: {
+      frame: { '-1': 'moralised', '0': 'neutral', '1': 'medicalised' },
+      tier: ['prohibition', 'possession decriminalised', 'medical supply',
+             'regulated retail', 'broad regulated market'],
+      verb: { up: 'raised', down: 'lowered' },
+      breach: { jump: 'More than one tier moved in a single round',
+                reversal: 'A previous tier change was reversed within eight quarters' }
+    },
+
+    /* --- §8.1 the chain catalogue ---------------------------------- *
+     * One entry per lever/target pair, so a decision contributes at
+     * most one queue entry to a variable in a quarter and magnitudes
+     * cannot double-count. `lagFrom`/`lagTo` are the quarters after the
+     * decision over which that mechanism is still moving that target,
+     * read off §7's own adjustment rates: 0.25 on price is nearly spent
+     * inside six quarters, 0.14 on legal capacity is not spent inside
+     * twelve, 0.10 on norms is not spent inside sixteen.
+     *
+     * Every hop carries exactly one of PSY/ECO/POL (§8.2). The
+     * originating hop of a lever change is POL by that section's own
+     * convention — "lever settings themselves" are institutional facts
+     * — so a chain is single-discipline only when its mechanism is
+     * institutional the whole way down: an announcement priced by a
+     * constituency, a record issued, a credibility penalty.
+     *
+     * `dir` restricts a template to a raise ('up') or a cut ('down');
+     * 'any' means the mechanism runs both ways. `when` restricts it to
+     * a coherence breach (§5).                                        */
+    chains: [
+
+      /* --- enforcement ------------------------------------------- */
+      { id: 'E-price', lever: 'E', dir: 'any', target: 'P', lagFrom: 1, lagTo: 6,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Seizures move illicit capacity; the street price follows.' }] },
+      { id: 'E-margin', lever: 'E', dir: 'any', target: 'margin', lagFrom: 1, lagTo: 6,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Price moves against a risk cost that moves with it.' },
+               { d: 'ECO', text: 'Unit margin is what is left, and it is what entrants read.' }] },
+      { id: 'E-capacity', lever: 'E', dir: 'any', target: 'Kill', lagFrom: 1, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Interdiction removes illicit capacity once, at the moment it changes.' },
+               { d: 'ECO', text: 'Margin draws replacement capacity back in over four to six quarters.' }] },
+      { id: 'E-potency', lever: 'E', dir: 'any', target: 'Phi', lagFrom: 2, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Concealment cost per dose falls as potency rises, so the market moves upward.' },
+               { d: 'ECO', text: 'The quality shift is faster up than down: it does not reverse when pressure lifts.' }] },
+      { id: 'E-var', lever: 'E', dir: 'any', target: 'PhiVar', lagFrom: 2, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Dose variance tracks potency in an unregulated supply.' }] },
+      { id: 'E-crime', lever: 'E', dir: 'any', target: 'crime', lagFrom: 2, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Seizures cut illicit capacity; the street price rises.' },
+               { d: 'ECO', text: 'Acquisitive offending rises as dependent users fund a costlier supply.' }] },
+      { id: 'E-deaths', lever: 'E', dir: 'any', target: 'deaths', lagFrom: 2, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Potency and dose variance move with concealment cost.' },
+               { d: 'ECO', text: 'Fatality is driven by variance, not by volume.' }] },
+      { id: 'E-records', lever: 'E', dir: 'any', target: 'records', lagFrom: 1, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'POL', text: 'Possession records are issued, and a record is never expunged.' }] },
+      { id: 'E-incarc', lever: 'E', dir: 'any', target: 'incarcerated', lagFrom: 1, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'POL', text: 'The incarcerated stock builds toward its own release hazard.' }] },
+      { id: 'E-trust', lever: 'E', dir: 'any', target: 'trust', lagFrom: 1, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'PSY', text: 'Visible enforcement degrades trust in the institutions that also run treatment.' }] },
+      { id: 'E-treat', lever: 'E', dir: 'any', target: 'Dtreat', lagFrom: 3, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'PSY', text: 'Institutional trust moves, and presentation is conditioned on it.' },
+               { d: 'PSY', text: 'The treated stock follows who is willing to come forward.' }] },
+      { id: 'E-wait', lever: 'E', dir: 'any', target: 'W', lagFrom: 3, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'PSY', text: 'Presentations move with trust, and the queue moves with presentations.' }] },
+      { id: 'E-norm', lever: 'E', dir: 'any', target: 'norm', lagFrom: 2, lagTo: 12,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'PSY', text: 'Visible enforcement carries a deterrent signal, and normalisation is the slowest variable in the model.' }] },
+      { id: 'E-prev', lever: 'E', dir: 'any', target: 'U', lagFrom: 2, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'PSY', text: 'Arrest risk deters initiation specifically.' },
+               { d: 'ECO', text: 'A higher price prices out the marginal, price-elastic initiate.' }] },
+      { id: 'E-tax', lever: 'E', dir: 'any', target: 'taxBurden', lagFrom: 1, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Policing and the incarcerated stock are funded from taxation, and the burden is felt with a lag.' }] },
+      { id: 'E-centre', lever: 'E', dir: 'up', target: 'centre', lagFrom: 0, lagTo: 3,
+        hops: [{ d: 'POL', text: 'Enforcement raised to {to} in Q{q}.' },
+               { d: 'POL', text: 'The Centre applauds the announcement, and the applause decays.' }] },
+      { id: 'E-trad', lever: 'E', dir: 'up', target: 'trad', lagFrom: 0, lagTo: 3,
+        hops: [{ d: 'POL', text: 'Enforcement raised to {to} in Q{q}.' },
+               { d: 'POL', text: 'Traditional support moves on the gesture, not on the outcome.' }] },
+      { id: 'E-prog', lever: 'E', dir: 'any', target: 'prog', lagFrom: 1, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Enforcement {verb} to {to} in Q{q}.' },
+               { d: 'POL', text: 'Progressive support is priced on the enforcement level and on the record count it produces.' }] },
+
+      /* --- treatment ---------------------------------------------- */
+      { id: 'T-wait', lever: 'T', dir: 'any', target: 'W', lagFrom: 4, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Treatment funding {verb} to {to} in Q{q}.' },
+               { d: 'POL', text: 'Procurement is slow: capacity arrives through a four-quarter queue.' },
+               { d: 'ECO', text: 'Places against presentations set the waiting time.' }] },
+      { id: 'T-treat', lever: 'T', dir: 'any', target: 'Dtreat', lagFrom: 4, lagTo: 12,
+        hops: [{ d: 'POL', text: 'Treatment funding {verb} to {to} in Q{q}.' },
+               { d: 'POL', text: 'Capacity arrives four quarters after it is bought.' },
+               { d: 'PSY', text: 'A shorter queue is discounted less steeply, so more people present.' }] },
+      { id: 'T-retention', lever: 'T', dir: 'any', target: 'R', lagFrom: 1, lagTo: 4,
+        hops: [{ d: 'POL', text: 'Treatment funding {verb} to {to} in Q{q}.' },
+               { d: 'PSY', text: 'Retention moves with what a place is actually like once someone is in it.' }] },
+      { id: 'T-deaths', lever: 'T', dir: 'any', target: 'deaths', lagFrom: 5, lagTo: 14,
+        hops: [{ d: 'POL', text: 'Treatment funding {verb} to {to} in Q{q}.' },
+               { d: 'PSY', text: 'Presentation rises as the queue shortens.' },
+               { d: 'ECO', text: 'Fatality falls with the untreated dependent stock.' }] },
+      { id: 'T-crime', lever: 'T', dir: 'any', target: 'crime', lagFrom: 6, lagTo: 16,
+        hops: [{ d: 'POL', text: 'Treatment funding {verb} to {to} in Q{q}.' },
+               { d: 'PSY', text: 'Presentation rises as the queue shortens.' },
+               { d: 'ECO', text: 'Fewer untreated dependent users are funding a costly supply.' }] },
+      { id: 'T-tax', lever: 'T', dir: 'any', target: 'taxBurden', lagFrom: 1, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Treatment funding {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Programme spending is funded from taxation, and the burden is felt with a lag.' }] },
+      { id: 'T-centre', lever: 'T', dir: 'any', target: 'centre', lagFrom: 4, lagTo: 14,
+        hops: [{ d: 'POL', text: 'Treatment funding {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'The tax burden rises with the programme, with a lag of its own.' },
+               { d: 'POL', text: 'The Centre prices the fiscal position, not the service.' }] },
+      { id: 'T-health', lever: 'T', dir: 'any', target: 'health', lagFrom: 0, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Treatment funding {verb} to {to} in Q{q}.' },
+               { d: 'POL', text: 'The Health bloc prices treatment access and the waiting time it sees.' }] },
+
+      /* --- harm reduction ------------------------------------------ */
+      { id: 'H-var', lever: 'H', dir: 'any', target: 'PhiVar', lagFrom: 0, lagTo: 3,
+        hops: [{ d: 'POL', text: 'Harm reduction {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Drug checking narrows the dose variance of an unregulated supply.' }] },
+      { id: 'H-deaths', lever: 'H', dir: 'any', target: 'deaths', lagFrom: 0, lagTo: 3,
+        hops: [{ d: 'POL', text: 'Harm reduction {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'Fatality falls directly, and again through the variance that drives it.' }] },
+      { id: 'H-trad', lever: 'H', dir: 'any', target: 'trad', lagFrom: 0, lagTo: 6,
+        hops: [{ d: 'POL', text: 'Harm reduction {verb} to {to} in Q{q}.' },
+               { d: 'POL', text: 'Traditional support is priced on the gesture, most sharply under a moralised frame.' }] },
+      { id: 'H-tax', lever: 'H', dir: 'any', target: 'taxBurden', lagFrom: 1, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Harm reduction {verb} to {to} in Q{q}.' },
+               { d: 'ECO', text: 'The cheapest lever in the model is still funded from taxation.' }] },
+
+      /* --- supply regime -------------------------------------------- */
+      { id: 'G-legal', lever: 'G', dir: 'any', target: 'Kleg', lagFrom: 2, lagTo: 12,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'POL', text: 'Procurement is slow: legal capacity stands up more slowly than illicit capacity enters.' },
+               { d: 'ECO', text: 'Regulated capacity accumulates toward its target.' }] },
+      { id: 'G-share', lever: 'G', dir: 'any', target: 'M', lagFrom: 3, lagTo: 14,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'ECO', text: 'Illicit share falls by building the denominator, not by shrinking the numerator.' }] },
+      { id: 'G-price', lever: 'G', dir: 'any', target: 'P', lagFrom: 1, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'ECO', text: 'Regulated supply lowers the price, directly and by adding capacity.' }] },
+      { id: 'G-potency', lever: 'G', dir: 'any', target: 'Phi', lagFrom: 2, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'ECO', text: 'A supply that need not be concealed has no reason to concentrate.' }] },
+      { id: 'G-var', lever: 'G', dir: 'any', target: 'PhiVar', lagFrom: 2, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'ECO', text: 'Dose variance collapses when the dose is known.' }] },
+      { id: 'G-deaths', lever: 'G', dir: 'any', target: 'deaths', lagFrom: 3, lagTo: 12,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'ECO', text: 'Variance falls, and variance is what kills.' }] },
+      { id: 'G-norm', lever: 'G', dir: 'any', target: 'norm', lagFrom: 4, lagTo: 16,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'PSY', text: 'Legality changes perceived acceptability, and norms are the slowest variable in the model.' }] },
+      { id: 'G-prev', lever: 'G', dir: 'any', target: 'U', lagFrom: 6, lagTo: 20,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'PSY', text: 'Normalisation moves, and use begets use.' },
+               { d: 'ECO', text: 'A lower price reaches the price-elastic margin of initiation.' }] },
+      { id: 'G-crime', lever: 'G', dir: 'any', target: 'crime', lagFrom: 2, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'ECO', text: 'A legal supply need not be funded acquisitively.' }] },
+      { id: 'G-budget', lever: 'G', dir: 'any', target: 'budget', lagFrom: 1, lagTo: 10,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'ECO', text: 'A regulated market returns revenue, after the setup cost of the tier.' }] },
+      { id: 'G-records', lever: 'G', dir: 'any', target: 'records', lagFrom: 1, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'POL', text: 'Possession ceases to be an offence at the point the tier passes it.' }] },
+      { id: 'G-trad', lever: 'G', dir: 'any', target: 'trad', lagFrom: 0, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'POL', text: 'Traditional support is hostile to any increase in the tier, on the announcement.' }] },
+      { id: 'G-prog', lever: 'G', dir: 'any', target: 'prog', lagFrom: 0, lagTo: 8,
+        hops: [{ d: 'POL', text: 'Supply regime moved to {tier} in Q{q}.' },
+               { d: 'POL', text: 'Progressive support is priced on the tier and on the records it stops issuing.' }] },
+
+      /* --- frame ---------------------------------------------------- */
+      { id: 'F-treat', lever: 'F', dir: 'any', target: 'Dtreat', lagFrom: 1, lagTo: 8,
+        hops: [{ d: 'POL', text: 'The frame was set to {frame} in Q{q}.' },
+               { d: 'PSY', text: 'Stigma is what determines whether a place is presented to at all.' }] },
+      { id: 'F-wait', lever: 'F', dir: 'any', target: 'W', lagFrom: 1, lagTo: 8,
+        hops: [{ d: 'POL', text: 'The frame was set to {frame} in Q{q}.' },
+               { d: 'PSY', text: 'The queue is set by who comes forward, so framing moves it without moving a place.' }] },
+      { id: 'F-retention', lever: 'F', dir: 'any', target: 'R', lagFrom: 1, lagTo: 4,
+        hops: [{ d: 'POL', text: 'The frame was set to {frame} in Q{q}.' },
+               { d: 'PSY', text: 'People stay in a service that does not treat them as culpable.' }] },
+      { id: 'F-norm', lever: 'F', dir: 'any', target: 'norm', lagFrom: 3, lagTo: 14,
+        hops: [{ d: 'POL', text: 'The frame was set to {frame} in Q{q}.' },
+               { d: 'PSY', text: 'Moralised framing suppresses normalisation; the medicalised frame does not promote it.' }] },
+      { id: 'F-deaths', lever: 'F', dir: 'any', target: 'deaths', lagFrom: 3, lagTo: 12,
+        hops: [{ d: 'POL', text: 'The frame was set to {frame} in Q{q}.' },
+               { d: 'PSY', text: 'Presentation and retention both move with stigma.' },
+               { d: 'ECO', text: 'Fatality falls with the untreated dependent stock.' }] },
+      { id: 'F-prog', lever: 'F', dir: 'any', target: 'prog', lagFrom: 0, lagTo: 6,
+        hops: [{ d: 'POL', text: 'The frame was set to {frame} in Q{q}.' },
+               { d: 'POL', text: 'The frame costs nothing fiscally and is priced by every bloc.' }] },
+      { id: 'F-trad', lever: 'F', dir: 'any', target: 'trad', lagFrom: 0, lagTo: 6,
+        hops: [{ d: 'POL', text: 'The frame was set to {frame} in Q{q}.' },
+               { d: 'POL', text: 'Traditional support moves against the medicalised frame and with the moralised one.' }] },
+      { id: 'F-health', lever: 'F', dir: 'any', target: 'health', lagFrom: 0, lagTo: 6,
+        hops: [{ d: 'POL', text: 'The frame was set to {frame} in Q{q}.' },
+               { d: 'POL', text: 'The Health bloc prices the frame as a statement about its own service.' }] },
+
+      /* --- §5 coherence: the credibility penalty ------------------- *
+       * A breach is not a lever of its own: it attaches to the G change
+       * that caused it, and an entry's magnitude is that decision's
+       * WHOLE contribution to the target. The penalty on Traditional
+       * and on Progressive is therefore already inside `G-trad` and
+       * `G-prog`, and a second chain on those targets would count it
+       * twice. What the breach needs a chain of its own for is what the
+       * tier change would not otherwise have moved: institutional trust,
+       * and the Centre.                                                */
+      { id: 'C-trust', lever: 'G', dir: 'any', when: 'breach', target: 'trust',
+        lagFrom: 0, lagTo: 8,
+        hops: [{ d: 'POL', text: '{breach}, in Q{q}.' },
+               { d: 'POL', text: 'A regime that cannot be planned against is not credited as one, and reversal is the more expensive breach.' }] },
+      { id: 'C-centre', lever: 'G', dir: 'any', when: 'breach', target: 'centre',
+        lagFrom: 0, lagTo: 6,
+        hops: [{ d: 'POL', text: '{breach}, in Q{q}.' },
+               { d: 'POL', text: 'The coherence penalty falls on every constituency at once.' }] }
+    ],
 
     /* --- §9 the twelve: global coefficients ------------------------ *
      * Build-order step 7. Every person's stability is a partial
@@ -587,13 +860,23 @@
       _cost: 0,
       _coherence: { jump: false, reversal: false },
       _blocTerms: null,                  // §7.8 target decomposition, step 8
-      _signals: null                     // §9 population signals, step 7
+      _signals: null,                    // §9 population signals, step 7
+
+      /* --- §8 the delayed-consequence engine, step 6 -------------- */
+      _shadow: false,                    // true inside a counterfactual run
+      _decisionSeq: 0,
+      _decisions: [],                    // one per lever change, each with a shadow run
+      _queue: [],                        // §8.1 every entry enqueued, in order
+      _fired: [],                        // the entries that fired this quarter
+      _amber: {},                        // §8.1 the amber rule, by reading
+      _prevReadings: null                // last quarter's values of the watched readings
     };
     var w = P.blocs.weights;
     st.A = w.centre * st.blocs.centre + w.prog * st.blocs.prog +
            w.trad * st.blocs.trad + w.health * st.blocs.health;
     var n;
     for (n = 0; n < P.treatment.capacityQueue; n++) st._tQueue.push(0);
+    st._prevReadings = readAll(st, P);
     return st;
   }
 
@@ -611,6 +894,17 @@
     var g = G / 4;
     var prev = st._prevLevers;
     var dE = E - prev.E, dT = T - prev.T, dH = H - prev.H, dG = G - prev.G;
+
+    /* --- §8 step 6: what the amber rule and the shadow runs read --
+     * The readings as they stood before this quarter, and — only when a
+     * lever actually moved — a full copy of the state for the shadow
+     * run of that decision to start from.                             */
+    var track = P.delayed.track && !st._shadow;
+    var pre = null;
+    if (track) {
+      st._prevReadings = readAll(st, P);
+      if (dE || dT || dH || dG || (F - prev.F)) pre = cloneSim(st);
+    }
 
     st.q += 1;
 
@@ -756,9 +1050,16 @@
     st.Dtreat = Math.min(st.Dtreat, st.D);
     st.deathsCum += st.deaths;
 
-    var sig = peopleSignals(st, { E: E, T: T, H: H, G: G, F: F }, P);
-    st._signals = sig;
-    applyDeathsToTwelve(st, sig, P);
+    /* A shadow run (§8) exists to attribute the aggregate readings. The
+       twelve are rendered from the real run only and never feed back
+       into the aggregates, so skipping them inside a shadow changes no
+       watched value and saves most of the attribution's cost. */
+    var sig = null;
+    if (!st._shadow) {
+      sig = peopleSignals(st, { E: E, T: T, H: H, G: G, F: F }, P);
+      st._signals = sig;
+      applyDeathsToTwelve(st, sig, P);
+    }
 
     /* ============================================================== *
      * 9. Crime, incarceration, records (§7.7)                         */
@@ -916,9 +1217,18 @@
 
     /* ============================================================== *
      * 12. The twelve (§9) — build-order step 7.                       */
-    updateTwelve(st, sig, P);
+    if (sig) updateTwelve(st, sig, P);
 
-    st._prevLevers = { E: E, T: T, H: H, G: G, F: F };
+    var levNow = { E: E, T: T, H: H, G: G, F: F };
+    var levPrev = { E: prev.E, T: prev.T, H: prev.H, G: prev.G, F: prev.F };
+    st._prevLevers = levNow;
+
+    /* ============================================================== *
+     * §8 the delayed-consequence engine — build-order step 6.
+     * Runs after the quarter is resolved: it is an attribution layer
+     * over the state, and reads nothing back into it.                 */
+    if (track) trackDelayed(st, levNow, pre, levPrev, coh, P);
+
     return st;
   }
 
@@ -957,7 +1267,12 @@
       A: st.A, trust: st.trust, budget: st.budget, S: st.S,
       taxBurden: st.taxBurden, cost: st._cost,
       people: peopleSnapshot(st),
-      blocTerms: st._blocTerms
+      blocTerms: st._blocTerms,
+      /* §8: what the Read phase renders — the amber marks and the
+         chains in flight this quarter. */
+      amber: st._amber,
+      fired: st._fired,
+      chains: activeChains(st)
     };
   }
 
@@ -1172,6 +1487,331 @@
   }
 
   /* ===================================================================
+   * THE DELAYED-CONSEQUENCE ENGINE (§8) — build-order step 6
+   * -------------------------------------------------------------------
+   * "Every lever change enqueues one or more effects with an explicit
+   * fire quarter, magnitude, target and a human-readable causal string."
+   *
+   * The queue does not push the model. §7 already contains every
+   * mechanism, so an entry carrying a magnitude of its own would
+   * double-count one of them, and the amber rule would then be marking
+   * an invented quantity. Instead each decision carries a SHADOW RUN:
+   * the same run, with that one lever change removed and everything
+   * else — including every later decision — left as it happened. The
+   * contribution of a decision to a reading is the difference between
+   * the two runs, and an entry's magnitude is that contribution's
+   * movement in the quarter the entry fires. The lag windows in
+   * PARAMS.chains say WHEN a mechanism is still moving its target; the
+   * model says by how much.
+   *
+   * Cost: one extra state per lever change, stepped only while that
+   * decision still has an entry to fire. A held-lever run carries at
+   * most five, for the length of the longest window.
+   * =================================================================== */
+
+  var LEVER_KEYS = ['E', 'T', 'H', 'G', 'F'];
+
+  /* A state the shadow run can be stepped from: the model fields, deep
+     enough that nothing is shared with the real run, and none of the
+     step-6 bookkeeping — a shadow never tracks shadows of its own. */
+  function cloneSim(st) {
+    var c = {}, k, i, p, q, out;
+    for (k in st) if (Object.prototype.hasOwnProperty.call(st, k)) {
+      if (k === '_decisions' || k === '_queue' || k === '_fired' ||
+          k === '_amber' || k === '_prevReadings' || k === '_pre') continue;
+      c[k] = st[k];
+    }
+    c.blocs = { centre: st.blocs.centre, prog: st.blocs.prog,
+                trad: st.blocs.trad, health: st.blocs.health };
+    c._ref = { U0: st._ref.U0, D0: st._ref.D0, K0: st._ref.K0,
+               margin0: st._ref.margin0 };
+    c._prevLevers = { E: st._prevLevers.E, T: st._prevLevers.T,
+                      H: st._prevLevers.H, G: st._prevLevers.G,
+                      F: st._prevLevers.F };
+    c._tQueue = st._tQueue.slice();
+    c._gHistory = [];
+    for (i = 0; i < st._gHistory.length; i++)
+      c._gHistory.push({ q: st._gHistory[i].q, delta: st._gHistory[i].delta });
+    c.forecasts = st.forecasts.slice();
+    c._coherence = { jump: st._coherence.jump, reversal: st._coherence.reversal };
+    out = [];
+    for (i = 0; i < st.people.length; i++) {
+      p = st.people[i];
+      q = {};
+      for (k in p) if (Object.prototype.hasOwnProperty.call(p, k)) q[k] = p[k];
+      q._channels = {};
+      out.push(q);
+    }
+    c.people = out;
+    c._blocTerms = null;
+    c._signals = null;
+    c._shadow = true;
+    return c;
+  }
+
+  /* The four bloc readings live under st.blocs; everything else the
+     amber rule watches is a top-level field. */
+  function readingValue(st, key) {
+    if (Object.prototype.hasOwnProperty.call(st.blocs, key)) return st.blocs[key];
+    return st[key];
+  }
+
+  function readAll(st, P) {
+    var out = {}, r = P.delayed.readings, i;
+    for (i = 0; i < r.length; i++) out[r[i]] = readingValue(st, r[i]);
+    return out;
+  }
+
+  /* The counterfactual levers for one decision: the run as it happened,
+     with that decision's own move subtracted. Subtracting the move
+     rather than pinning the lever means later decisions on the same
+     lever still land in the shadow, so what is removed is this
+     decision and nothing else. */
+  function counterLevers(lev, d, P) {
+    var out = { E: lev.E, T: lev.T, H: lev.H, G: lev.G, F: lev.F };
+    var rng = P.levers.range[d.lever];
+    out[d.lever] = clamp(lev[d.lever] - d.delta, rng[0], rng[1]);
+    return out;
+  }
+
+  function leverLabel(P, lever, value) {
+    if (lever === 'F') return P.labels.frame[String(value)];
+    if (lever === 'G') return P.labels.tier[value];
+    return value;
+  }
+
+  function chainText(text, d, P) {
+    var verb = d.delta > 0 ? P.labels.verb.up : P.labels.verb.down;
+    return String(text)
+      .replace(/\{q\}/g, d.q)
+      .replace(/\{verb\}/g, verb)
+      .replace(/\{to\}/g, leverLabel(P, d.lever, d.to))
+      .replace(/\{from\}/g, leverLabel(P, d.lever, d.from))
+      .replace(/\{tier\}/g, P.labels.tier[clamp(d.to, P.levers.range.G[0], P.levers.range.G[1])])
+      .replace(/\{frame\}/g, P.labels.frame[String(d.to)])
+      .replace(/\{breach\}/g, d.breach ? P.labels.breach[d.breach] : '');
+  }
+
+  function disciplinesOf(hops) {
+    var out = [], i;
+    for (i = 0; i < hops.length; i++)
+      if (out.indexOf(hops[i].d) < 0) out.push(hops[i].d);
+    return out;
+  }
+
+  /* §8.1: one decision, with its shadow and its queue entries. Every
+     entry is enqueued AT THE DECISION with its fire quarter, target and
+     chain already fixed; only the magnitude waits for the quarter it
+     fires in. */
+  function newDecision(st, pre, lever, from, to, coh, P) {
+    var d = {
+      id: (++st._decisionSeq),
+      q: st.q,
+      lever: lever, from: from, to: to, delta: to - from,
+      /* §5: a reversal is the larger breach, so it names the chain when
+         a single change is both. */
+      breach: coh.reversal ? 'reversal' : (coh.jump ? 'jump' : null),
+      shadow: cloneSim(pre),
+      open: true,
+      lastFire: st.q,
+      targets: [],
+      contrib: {}, dContrib: {},
+      entries: []
+    };
+    var cat = P.chains, i, t, tpl, hops, j, ds, lag, e;
+    for (i = 0; i < cat.length; i++) {
+      tpl = cat[i];
+      if (tpl.lever !== lever) continue;
+      if (tpl.dir === 'up' && d.delta <= 0) continue;
+      if (tpl.dir === 'down' && d.delta >= 0) continue;
+      if (tpl.when === 'breach' && !d.breach) continue;
+      hops = [];
+      for (j = 0; j < tpl.hops.length; j++)
+        hops.push({ d: tpl.hops[j].d, text: chainText(tpl.hops[j].text, d, P) });
+      ds = disciplinesOf(hops);
+      if (d.targets.indexOf(tpl.target) < 0) d.targets.push(tpl.target);
+      for (lag = tpl.lagFrom; lag <= tpl.lagTo; lag++) {
+        e = {
+          chainId: d.id + ':' + tpl.id,
+          template: tpl.id,
+          decision: d.id,
+          originQ: d.q,
+          lever: lever, from: from, to: to,
+          firesAt: d.q + lag,
+          target: tpl.target,
+          magnitude: null,
+          resolved: false,
+          disciplines: ds,
+          cross: ds.length > 1,          // §8.2 double hairline when true
+          chain: hops
+        };
+        d.entries.push(e);
+        st._queue.push(e);
+        if (e.firesAt > d.lastFire) d.lastFire = e.firesAt;
+      }
+    }
+    return d;
+  }
+
+  /* Called at the end of every real quarter. Advances the shadows,
+     opens decisions for this quarter's lever changes, resolves the
+     entries that fire now, and applies the amber rule. */
+  function trackDelayed(st, lev, pre, prevLev, coh, P) {
+    var dl = P.delayed, i, j, k, d, e, key;
+
+    /* (a) every open shadow advances one quarter, counterfactually. */
+    for (i = 0; i < st._decisions.length; i++) {
+      d = st._decisions[i];
+      if (d.open) stepQuarter(d.shadow, counterLevers(lev, d, P), P);
+    }
+
+    /* (b) this quarter's lever changes each open a decision. §5's
+       coherence breach is not a lever of its own: it attaches to the
+       G change that caused it, which is where its chain starts. */
+    for (k = 0; k < LEVER_KEYS.length; k++) {
+      key = LEVER_KEYS[k];
+      if (lev[key] === prevLev[key]) continue;
+      d = newDecision(st, pre, key, prevLev[key], lev[key], coh, P);
+      stepQuarter(d.shadow, counterLevers(lev, d, P), P);
+      st._decisions.push(d);
+    }
+
+    /* (c) resolve the entries firing this quarter from the model's own
+       counterfactual difference. */
+    st._fired = [];
+    for (i = 0; i < st._decisions.length; i++) {
+      d = st._decisions[i];
+      if (!d.open) continue;
+      d.dContrib = {};
+      for (j = 0; j < d.targets.length; j++) {
+        key = d.targets[j];
+        var now = readingValue(st, key) - readingValue(d.shadow, key);
+        d.dContrib[key] = now - (d.contrib[key] || 0);
+        d.contrib[key] = now;
+      }
+      for (j = 0; j < d.entries.length; j++) {
+        e = d.entries[j];
+        if (e.firesAt !== st.q) continue;
+        e.magnitude = d.dContrib[e.target];
+        e.resolved = true;
+        st._fired.push(e);
+      }
+      if (st.q >= d.lastFire) d.open = false;
+    }
+
+    /* (d) the amber rule (§8.1). For each displayed variable, the share
+       of this quarter's change attributable to entries that originated
+       three or more quarters ago. Amber means exactly one thing on
+       screen: this is you, three quarters ago. */
+    st._amber = {};
+    for (i = 0; i < dl.readings.length; i++) {
+      key = dl.readings[i];
+      var val = readingValue(st, key);
+      var delta = val - st._prevReadings[key];
+      var scale = Math.max(Math.abs(val), dl.noiseRef);
+      if (Math.abs(delta) < dl.noiseFloor * scale) continue;
+      var old = 0, tracked = 0, ents = [];
+      for (j = 0; j < st._fired.length; j++) {
+        e = st._fired[j];
+        if (e.target !== key) continue;
+        tracked += e.magnitude;
+        if (st.q - e.originQ >= dl.amberLag) { old += e.magnitude; ents.push(e); }
+      }
+      if (!ents.length) continue;
+      if (old / delta < dl.amberShare) continue;
+      st._amber[key] = {
+        share: old / delta, delta: delta, attributed: old, tracked: tracked,
+        marker: dl.marker, entries: ents
+      };
+    }
+  }
+
+  /* -------------------------------------------------------------------
+   * What the UI reads
+   * ----------------------------------------------------------------- */
+
+  /* The chains in flight this quarter, one per decision/template pair.
+     `minMagnitude` drops the ones the model is not actually moving:
+     a chain whose mechanism is real but whose magnitude is zero in this
+     configuration (records under no enforcement) is in flight and is
+     not worth a hairline. */
+  function activeChains(st, opts) {
+    opts = opts || {};
+    var seen = {}, out = [], i, e;
+    for (i = 0; i < st._fired.length; i++) {
+      e = st._fired[i];
+      if (seen[e.chainId]) continue;
+      if (opts.minMagnitude != null &&
+          Math.abs(e.magnitude || 0) < opts.minMagnitude) continue;
+      seen[e.chainId] = 1;
+      out.push(e);
+    }
+    return out;
+  }
+
+  /* §8.2's C overlay: every active chain filed under the discipline of
+     its ORIGINATING hop, carrying the discipline of its TERMINATING hop
+     so the connector can be drawn between the columns. The tangle is
+     the picture of the primary learning outcome. */
+  function chainOverlay(st, opts) {
+    var groups = { PSY: [], ECO: [], POL: [] };
+    var chains = activeChains(st, opts), i, e, from, to;
+    for (i = 0; i < chains.length; i++) {
+      e = chains[i];
+      from = e.chain[0].d;
+      to = e.chain[e.chain.length - 1].d;
+      groups[from].push({
+        chainId: e.chainId, template: e.template, target: e.target,
+        originQ: e.originQ, from: from, to: to, connector: from !== to,
+        cross: e.cross, disciplines: e.disciplines, chain: e.chain,
+        magnitude: e.magnitude
+      });
+    }
+    return groups;
+  }
+
+  /* The pinned block (§8.1): the chain in serif, naming the quarter of
+     the originating decision, ruled once or twice by §8.2. */
+  function pinChain(entry) {
+    return {
+      chainId: entry.chainId,
+      originQ: entry.originQ,
+      target: entry.target,
+      magnitude: entry.magnitude,
+      disciplines: entry.disciplines,
+      cross: entry.cross,
+      rule: entry.cross ? 'double' : 'single',
+      hops: entry.chain
+    };
+  }
+
+  /* §4.3 the disciplinary lens. `D` cycles all -> PSY -> ECO -> POL and
+     back; a reading the selected adviser does not own is dimmed, never
+     hidden and never recoloured. */
+  function nextLens(cur, P) {
+    P = P || PARAMS;
+    var order = P.lens.order, i = order.indexOf(cur);
+    return order[(i < 0 ? 0 : i + 1) % order.length];
+  }
+
+  function lensOwns(key, lens, P) {
+    P = P || PARAMS;
+    if (!lens || lens === P.lens.order[0]) return true;
+    var own = LENS[lens];
+    return !!own && own.indexOf(key) >= 0;
+  }
+
+  /* The whole lens in one call: every watched reading with the opacity
+     it should carry. Twenty lines of class toggling, as §4.3 says. */
+  function lensState(lens, P) {
+    P = P || PARAMS;
+    var out = { lens: lens, dim: {}, opacity: P.lens.dimOpacity }, r, i;
+    r = P.delayed.readings;
+    for (i = 0; i < r.length; i++) out.dim[r[i]] = !lensOwns(r[i], lens, P);
+    return out;
+  }
+
+  /* ===================================================================
    * CONSTITUENCIES (§7.8) — build-order step 8, headless part
    * -------------------------------------------------------------------
    * The bloc equations themselves live in stepQuarter, in the fixed
@@ -1184,7 +1824,12 @@
   var LENS = {
     /* §4.3 — which adviser owns which reading. Not a colour, not a
        number: a mapping the disciplinary lens dims against. */
-    ECO: ['P', 'margin', 'Kill', 'Kleg', 'M', 'Phi', 'crime', 'budget', 'taxBurden', 'cost'],
+    /* [step 6] deaths, deathsCum and PhiVar join the Economic Adviser's
+       column: §4.2's own question pool files "will deaths per quarter
+       rise, hold or fall?" as within-discipline ECO, and §8.2 tags
+       potency and its variance as a cost-driven quality shift. */
+    ECO: ['P', 'margin', 'Kill', 'Kleg', 'M', 'Phi', 'PhiVar', 'crime',
+          'deaths', 'deathsCum', 'budget', 'taxBurden', 'cost'],
     PSY: ['norm', 'W', 'R', 'Dtreat', 'trust', 'U', 'D', 'people'],
     POL: ['centre', 'prog', 'trad', 'health', 'A', 'S', 'incarcerated', 'records']
   };
@@ -1270,6 +1915,15 @@
     updateTwelve: updateTwelve,
     peopleSnapshot: peopleSnapshot,
     LENS: LENS,
+    /* --- §8 / §4.3, build-order step 6 ---------------------------- */
+    readingValue: readingValue,
+    readAll: readAll,
+    activeChains: activeChains,
+    chainOverlay: chainOverlay,
+    pinChain: pinChain,
+    nextLens: nextLens,
+    lensOwns: lensOwns,
+    lensState: lensState,
     coalitionStrip: coalitionStrip,
     collapseAttribution: collapseAttribution,
     clamp: clamp,
@@ -1302,4 +1956,31 @@
  * C. crime.releaseRate (0.11).
  *    §7.7 writes "− releases" without defining it. Modelled as a
  *    constant hazard on the incarcerated stock (≈2.3-year mean stay).
+ *
+ * D. §8.1's `magnitude`, and where it comes from.
+ *    §8.1 shows a queue entry carrying a magnitude, and §8's amber rule
+ *    needs one: it asks what SHARE of a quarter's change an old
+ *    decision accounts for. But §7 already contains every mechanism in
+ *    the model, so a magnitude stipulated in the queue would either
+ *    double-count one of them or contradict it, and the amber rule
+ *    would then be reading an invented quantity. Each decision
+ *    therefore carries a shadow run — the same run with that one lever
+ *    change removed and every later decision left in place — and an
+ *    entry's magnitude is the movement of the difference between the
+ *    two runs in the quarter the entry fires. Nothing is invented to
+ *    size an effect; PARAMS.chains says only WHEN each mechanism is
+ *    still moving its target, and the model says by how much. The
+ *    attribution provably changes no state variable, and can be
+ *    switched off for grid sweeps with delayed.track.
+ *
+ * E. one chain per decision and target.
+ *    Because an entry's magnitude is the decision's whole contribution
+ *    to a reading, two entries from one decision on one reading in one
+ *    quarter would count that contribution twice. The catalogue
+ *    therefore carries at most one template per lever/target pair, and
+ *    §5's coherence chains attach to the G change that caused the
+ *    breach on the two targets that change does not otherwise chain —
+ *    trust and the Centre. Test 8 asserts the invariant rather than the
+ *    engine enforcing it, so a catalogue edit that breaks it fails
+ *    loudly instead of being silently dropped.
  * =================================================================== */
