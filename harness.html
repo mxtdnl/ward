@@ -325,13 +325,34 @@ coefficients, once under the step-2 calibration overlay documented in
     check(4, 'prevalence unchanged: H enters neither norm* nor initiation',
           normStarAt(0) === normStarAt(1) && initAt(0) === initAt(1),
           'norm* and initiation are identical at H=0 and H=1 with state held fixed');
-    var deathGap = t1.history[40].deathsCum - t4.history[40].deathsCum;
-    check(4, 'the observed U gap is survivorship, amplified by norm contagion',
-          u4[39] > u1[39] && (u4[39] - u1[39]) > deathGap,
-          r0(deathGap) + ' fewer cumulative deaths produce a U gap of ' +
-          r0(u4[39] - u1[39]) + '  (x' + r2((u4[39] - u1[39]) / deathGap) +
-          ') — survivors feed the §7.4a contagion term, so H raises' +
-          ' prevalence indirectly even though it touches no initiation channel');
+    /* The control is the SAME FRAME with H=0, not the passive path: the
+       passive path runs F=0 and this one runs F=-1, and since [P6] the
+       frame moves norm*, so a passive comparison would price the frame
+       change as if it were harm reduction. One lever at a time. */
+    var t4base = go({ E: 0, T: 0, H: 0, G: 0, F: -1 });
+    var u4b = series(t4base.history, 'U');
+    var deathGap = t4base.history[40].deathsCum - t4.history[40].deathsCum;
+    var uGap = u4[39] - u4b[39];
+    /* Two channels run against each other here, and the assertion is
+       about which wins. Survivors ADD to U, but U's own outflow is
+       proportional to U (§7.4b cessation, 1.9%/quarter), so an addition
+       made in Q5 has largely decayed by Q40 — while deathsCum keeps
+       every one of those quarters. §7.4a's contagion term pushes the
+       other way, but it is one-sided (max(0, U/U0 - 1)) and since [P6]
+       a moralised frame holds norm below 1, so it barely engages here.
+       Net: the Q40 gap is positive and smaller than the cumulative
+       death difference. It is survivorship, not recruitment. */
+    var uPeak = 0;
+    for (var iq = 1; iq <= 40; iq++)
+      uPeak = Math.max(uPeak, t4.history[iq].U / t4.state._ref.U0);
+    check(4, 'the U gap is survivorship: positive, and damped below the ' +
+          'cumulative death gap by cessation',
+          uGap > 0 && uGap < deathGap,
+          r0(deathGap) + ' fewer cumulative deaths leave ' + r0(uGap) +
+          ' more people alive at Q40  (x' + r2(uGap / deathGap) +
+          ') against an H=0 run at the same frame; U peaks at ' + r2(uPeak) +
+          ' x U0, so the one-sided §7.4a contagion term barely engages ' +
+          'under a moralised frame');
 
     /* --- TEST 8c -------------------------------------------------- */
     head('TEST 8c — ELASTICITY SANITY, DOUBLING P   [' + label + ']');

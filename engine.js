@@ -24,6 +24,8 @@
  *   [P3] riskCost and the Kleg floor
  *   [P4] lever costs doubled so the budget envelope binds
  *   [P5] spec/equation disagreements reconciled
+ *   [P6] §7.4a's frame term made one-sided, so the moralised frame
+ *        suppresses norms and the medicalised one does not promote them
  * ===================================================================== */
 
 (function (root) {
@@ -117,7 +119,16 @@
     norms: {
       regCoef: 0.26,                     // +0.26·g
       contagionCoef: 0.30,               // +0.30·max(0, U/U0 − 1)
-      frameCoef: 0.12,                   // −0.12·F
+      /* [P6] The frame term was −0.12·F, which raises the normalisation
+         target under the MORALISED frame (F = −1) and lowers it under the
+         medicalised one — the reverse of what §7.4a's own line says the
+         term is for ("moralised framing suppresses, medicalised does not
+         promote"). That sentence is asymmetric in both halves, so the
+         term is now one-sided: +0.12·min(F, 0). Moralised suppresses by
+         0.12; neutral and medicalised are both zero. The frame lever
+         keeps its symmetric bite in §7.8, where the blocs price the
+         announcement — this changes only what framing does to behaviour. */
+      frameCoef: 0.12,                   // +0.12·min(F, 0)
       enfCoef: 0.10,                     // −0.10·E·(1−g)
       adjust: 0.10                       // slowest variable in the model
     },
@@ -668,7 +679,7 @@
     var normStar = 1
       + pn.regCoef * g                                 // [PSY] legality
       + pn.contagionCoef * Math.max(0, st.U / ref.U0 - 1)  // [PSY] contagion
-      - pn.frameCoef * F                               // [PSY] framing
+      + pn.frameCoef * Math.min(F, 0)                  // [P6][PSY] framing
       - pn.enfCoef * E * (1 - g);                      // [PSY] deterrent signal
     st.norm += pn.adjust * (normStar - st.norm);
 

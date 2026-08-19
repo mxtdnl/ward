@@ -385,10 +385,19 @@ v1 hard-coded regulation's prevalence rise as `U* = U0·(1 + 0.18·g)`. The hone
 ```
 norm* = 1 + 0.26·g                       // [PSY] legality changes perceived acceptability
         + 0.30·max(0, U/U0 − 1)          // [PSY] social contagion: use begets use
-        − 0.12·F                         // [PSY] moralised framing suppresses, medicalised does not promote
+        + 0.12·min(F, 0)                 // [PSY] moralised framing suppresses, medicalised does not promote
         − 0.10·E·(1 − g)                 // [PSY] visible enforcement carries a deterrent signal
 norm += 0.10 · (norm* − norm)            // norms move slowly. This is the slowest variable in the model.
 ```
+
+`[v2.2]` **The frame term is one-sided.** v2 wrote it as `− 0.12·F`, which
+raises the normalisation target under the moralised frame and lowers it under
+the medicalised one — the reverse of the line beside it. Both halves of that
+line are asymmetric: moralised *suppresses*, medicalised *does not promote*.
+`+ 0.12·min(F, 0)` is the form that says so. The frame lever keeps its
+symmetric treatment in §7.5 (`frameMult`) and §7.8 (the blocs), so what changes
+is only what framing does to norms, which is where §7.4a says the psychological
+mechanism sits.
 
 The `0.10` adjustment rate is the slowest in the build and should be. It means a class that liberalises late does not see the prevalence cost arrive before the election, and a class that liberalises early does. That asymmetry is objective 2 expressed through a psychological variable rather than an institutional one.
 
