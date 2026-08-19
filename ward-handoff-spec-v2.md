@@ -254,13 +254,15 @@ The preview asymmetry in **Set** is central: the class can always see what a lev
 
 | Lever | Range | Quarterly cost | Notes |
 |---|---|---|---|
-| **Enforcement** `E` | 0–1, 5 detents | `40·E` + incarceration cost | Interdiction, policing intensity, prosecution |
-| **Treatment** `T` | 0–1, 5 detents | `55·T` | Capacity funding; effects lag 3–5 quarters |
-| **Harm reduction** `H` | 0–1, 5 detents | `15·H` | Naloxone distribution, drug checking, supervised consumption. Fastest-acting lever in the model |
+| **Enforcement** `E` | 0–1, 5 detents | `80·E` + incarceration cost `[v2.1]` | Interdiction, policing intensity, prosecution |
+| **Treatment** `T` | 0–1, 5 detents | `110·T` `[v2.1]` | Capacity funding; effects lag 3–5 quarters |
+| **Harm reduction** `H` | 0–1, 5 detents | `30·H` `[v2.1]` | Naloxone distribution, drug checking, supervised consumption. Fastest-acting lever in the model |
 | **Supply regime** `G` | 0–4 | `−30·g·(U/U₀)` net (revenue) after `120` one-off setup at each tier increase | 0 prohibition · 1 possession decriminalised · 2 medical supply for dependent users · 3 regulated retail, restricted class · 4 broad regulated market |
 | **Frame** `F` | −1 / 0 / +1 | free | moralised / neutral / medicalised. Costs nothing fiscally and is therefore routinely overlooked by classes — which is the point |
 
 `g = G/4`. Budget is `220` per quarter with carry-over and a permitted deficit to `−400`, beyond which coalition support takes a compounding penalty.
+
+`[v2.1]` **Costs doubled from v2.** At v2's `40/55/15` every lever at maximum cost `110` against an envelope of `220`: a class could run maximum treatment, maximum harm reduction and the medicalised frame simultaneously and still bank a surplus. Scarcity is one of the forces that is supposed to create the trade-off, and it was not one. Doubled, every lever at maximum costs exactly the envelope. Incarceration cost is `0.02` per incarcerated head per quarter — at v2's implied scale it exceeded the entire budget tenfold.
 
 Changing `G` by more than one tier in a single round incurs a **coherence penalty** to trust and to every constituency. Reversing a previous `G` change within 8 quarters incurs a larger one. This is the model's representation of policy credibility, and it stops the class from oscillating.
 
@@ -290,6 +292,7 @@ Changing `G` by more than one tier in a single round incurs a **coherence penalt
   records,    // [v2] cumulative criminal records issued for possession
   blocs,      // [v2] { centre, prog, trad, health } each 0–100
   A,          // coalition-weighted approval 0–100 — DERIVED from blocs
+  taxBurden,  // [v2.1] tax burden index, base 1.00 — the fiscal cost of the levers
   S,          // media salience 0–1, decays 0.75/quarter
   trust,      // institutional trust 0–1
   budget,
@@ -355,11 +358,13 @@ M = Kill / max(Kill + Kleg, 0.05)
 
 Three consequences the class must be able to observe:
 
-1. **Level enforcement has no equilibrium effect on illicit share.** Raising `E` and holding it seizes capacity once; the resulting margin increase draws it back within five or six quarters. A class that keeps escalating gets a sawtooth in `M` that never trends down.
+1. **Level enforcement has no equilibrium effect on illicit share.** Raising `E` and holding it seizes capacity once; the resulting margin increase draws it back within five or six quarters. A class that keeps escalating gets a sawtooth in `Kill` that never trends down. `[v2.1]` This claim is only true for a particular `riskCost` coefficient, and v2's `0.45` did not satisfy it: at `E = 1` the equilibrium margin was `0.891`, so `Kill` settled at `0.881` and held enforcement permanently removed 12% of illicit capacity. `0.32` puts the equilibrium at `0.991`. If the coefficient is retuned, re-verify this claim rather than assuming it.
 2. **The recovery is faster than the legal build-out.** `0.22` against `0.14` is deliberate. Illicit supply responds to profit faster than a state responds to a statute. Do not equalise these.
 3. **Only `G` moves `M` structurally**, and it does so by building the denominator rather than by shrinking the numerator.
 
-Ensure the trace of `M` over 40 quarters makes the sawtooth unmistakable, and that the market schematic's alternative path visibly thickens as `Kill` recovers.
+`[v2.1]` **The balloon is `Kill`, not `M`.** With `Kleg = 0` under prohibition, `M = Kill/(Kill + Kleg)` is identically `1.000`, so under `G = 0` the sawtooth is invisible on the variable this section puts it on. Two consequences: `Kleg` carries a floor of `0.20` representing the licit supply that exists under prohibition — Gareth is on prescribed benzodiazepines and Tomas moved to illicit supply *from* a prescription — which gives `M` a legible span; and the trace, the clamp animation and Test 2 are all stated on `Kill`.
+
+Ensure the trace of `Kill` over 40 quarters makes the sawtooth unmistakable, and that the market schematic's alternative path visibly thickens as `Kill` recovers.
 
 ### 7.3 Potency and variance
 
@@ -425,6 +430,26 @@ W = max(0, 40 · seeking / max(capacity, 1))
 R = clamp(0.35 + 0.30·T + 0.10·[F=+1] − 0.15·[F=−1], 0.1, 0.85)
 ```
 
+`[v2.1]` **Two things v2 left undefined and the engine must have.**
+
+*The waiting time is a target, not a level.* `W = 40·seeking/capacity` is circular — `seeking` depends on `W` through the discounting term — and taken as a same-quarter fixed point it oscillates violently at low capacity. It is therefore the equilibrium target, and `W` adjusts toward it at `0.35`, consistent with this section's opening line.
+
+```
+W*  = 40 · seeking / max(capacity, 1)
+W  += 0.35 · (W* − W)
+```
+
+*The treated stock has an update rule.* §7.4c removes `Dtreat·R·0.12` from `D` but nothing said how `Dtreat` itself moves.
+
+```
+admissions  = min(seeking, max(0, capacity − Dtreat))
+completions = Dtreat · R · 0.12        // the §7.4c term
+dropouts    = Dtreat · (1 − R) · 0.10  // the non-retained leave, still dependent
+Dtreat += admissions − completions − dropouts
+```
+
+Note that `capacity` is a stock of concurrent places, not a per-quarter flow, and that `capacityBase`/`capacityPerT` of `20`/`180` are mis-scaled by about ×20 against this section's own `W0 = 21` and `D0 = 9,140`: 197 presentations against 20 places gives `W = 394` weeks. `400`/`3600` reproduces `W0 = 21`.
+
 `[v2]` The waiting-time term is now an explicit discounting term rather than a bare power function, and `meanDiscount` is the population mean of the twelve's `discountRate` attribute — which in v1 was declared and never used. The behavioural consequence is that a queue does not merely delay presentation, it *deters* it non-linearly, and it deters the highest-discounting individuals first. Marek and Errol are the two most exposed to this; that is the design intent.
 
 The frame multiplier is the mechanism behind the emergent lesson. A class that funds treatment heavily while messaging punitively will build capacity that nobody presents to, and will see `W` fall while `Dtreat` stays flat. That divergence should be plainly visible in the readings.
@@ -446,6 +471,7 @@ Harm reduction is the fastest and strongest lever on fatality, acts within one q
 ```
 crime = 100 · (D_untreated/D0) · (P/100)^0.9 · qtyIndex · (1 − 0.45·g)
 incarcerated += 0.8·E·U·(1 − g)·0.004 − releases
+releases      = 0.11 · incarcerated     // [v2.1] constant hazard, ~2.3-year mean stay
 records      += 0.9·E·U·(1 − g)·0.006          // [v2] cumulative and irreversible
 ```
 
@@ -464,23 +490,49 @@ v1 collapsed politics into one scalar, which cannot teach that political feasibi
 | **Traditional** | 0.22 | crime, moralised frame, low prevalence | any `G` increase, harm reduction |
 | **Health** | 0.16 | deaths, treatment access, trust | punitive gestures, waiting times |
 
-```
-Δcentre = −0.070·(crime − 100) − 0.045·max(0, −budget/100) − eventImpact·(1 + S)·0.9
-Δprog   = +0.050·(deathsPrev − deaths)·(0.4 + 0.6·S)
-          − 0.030·Δincarcerated − 0.025·Δrecords
-          + 0.060·ΔG − 0.070·ΔE
-Δtrad   = −0.050·(crime − 100) − 0.130·ΔG − 0.060·ΔH
-          + 0.070·[F = −1] − 0.040·(U/U0 − 1)·100
-Δhealth = +0.060·(deathsPrev − deaths) − 0.045·ΔW
-          + 0.055·ΔT + 0.050·[F = +1] − 0.060·[punitive gesture taken]
+`[v2.1]` **Rewritten as partial adjustment toward a target.** As written in v2 the blocs *integrated* a flow with no equilibrium — the one place in §7 that departs from this section's own opening line — and it does not survive a forty-quarter run: under v2's `Δcentre`, held enforcement runs `−0.070·(crime − 100) = −2.75` per quarter for thirty consecutive quarters and nothing arrests it. Every bloc floored at zero by Q16 on the passive path.
 
-each bloc: clamp(bloc + Δ, 0, 100)
+```
+centre* = 52 − 0.30·(crime − 100) − 0.10·max(0, −budget/100) − 0.34·taxPts
+prog*   = 50 + 0.09·(40 − deaths)·(0.4 + 0.6·S) − 0.60·(records/1000)
+               + 3.0·g − 14·E + 9.0·F − 0.06·taxPts
+trad*   = 44 − 0.20·(crime − 100) − 30·g − 12·H − 7.0·F
+               − 0.50·(U/U0 − 1)·100 − 0.30·taxPts
+health* = 50 + 0.12·(40 − deaths) − 0.20·W + 10·T + 6.0·F − 8·E − 0.07·taxPts
+
+bloc += 0.15·(bloc* − bloc)          // then the shocks below, applied on top
+  centre += 3.5·max(0, ΔE)·(1 + S) − eventImpact·(1 + S)·0.9
+  prog   += 0.060·ΔG − 0.070·ΔE
+  trad   += 4.0·max(0, ΔE)·(1 + S) − 0.130·ΔG
+  health += −0.060·[punitive gesture taken]
+
+each bloc: clamp(bloc, 0, 100)
 A = 0.38·centre + 0.24·prog + 0.22·trad + 0.16·health
 ```
+
+Five changes are load-bearing and none is cosmetic:
+
+- **The bases differ.** `52 / 50 / 44 / 50`. If every bloc's target sits at a common base, the moderate configuration is near every bloc's ideal point and the constraint below cannot be met at *any* coefficient setting — verified by sweeping 675 configurations under six candidate fixes. Objective 4 requires incompatible ideal points, not merely opposed coefficients. §3's own header sketch shows a spread of 22–61, so a spread was always intended.
+- **The deaths reference is an aspiration (`40`), not the status quo.** Anchored at the achievable baseline, the status quo satisfies Progressive and Health by construction.
+- **Frame terms are symmetric in `F`.** v2 rewarded each bloc's preferred frame and never penalised the opposite one, so the frame lever — the free one this spec says classes overlook — cost nobody anything.
+- **Progressive gains its `F` term.** The table above lists Progressive as hostile to the moralised frame; v2's `Δprog` had no `F` term at all. The table and the equations disagreed.
+- **The enforcement gesture is on `max(0, ΔE)`, not on `E`.** The applause is for the announcement and decays; the crime bill arrives afterwards and persists. This is what makes Test 2's "Centre initially rises, then falls" reachable before media events exist.
+
+`[v2.1]` **The fiscal channel, and why treatment needed one.** In v2 no bloc carried a negative `T` term anywhere in §7.8, so nothing in the model opposed treatment: no coefficient could make it cost anything, and the moderate-treatment configuration satisfied all four blocs for the full forty quarters. The opponent is fiscal rather than ideological — programme spending is funded from taxation, and the burden is felt most by the blocs that care about the fiscal position.
+
+```
+taxBurden* = 1 + 0.50·(quarterly programme spend / 220)
+taxBurden += 0.12·(taxBurden* − taxBurden)     // [POL] a tax rise is felt with a lag
+taxPts     = (taxBurden − 1)·100
+```
+
+Centre (`0.34`) and Traditional (`0.30`) carry the burden; Progressive (`0.06`) and Health (`0.07`) largely accept taxation in exchange for services. This is why §5's costs are doubled: the burden only bites if the envelope binds.
 
 Note the salience term on the Progressive bloc: reducing deaths earns support **only in proportion to current salience**. Quiet success is unrewarded. This is objective 3 made mechanical.
 
 **Hard design constraint, parallel to §9:** verify by sweep that **no reachable configuration holds all four blocs above 50 simultaneously for more than four consecutive quarters.** Objective 4 must be true politically as well as humanly. Document the best configuration found and which bloc it sacrifices.
+
+`[v2.1]` **Verified.** Over a 675-point sweep (`E`×5, `T`×3, `H`×3, `G`×5, `F`×3), the longest streak with all four blocs above 50 is **0 quarters**. The best configuration found is `E=0 T=1 H=0 G=0 F=0` — maximum treatment under prohibition and a neutral frame — which lifts the weakest bloc to **48.4** at Q40 and **sacrifices Traditional** (Progressive is second at 48.6). The near-miss is deliberate: the constraint should feel like a boundary the class can see, not one they never approach.
 
 `[v2]` The coalition strip must show the four bloc numbers *and* the weighted `A`. A class watching only `A` will miss that a stable 41 can be a collapsing Centre offset by a rising Health bloc — and the Political Secretary's job is to say so.
 
@@ -677,14 +729,14 @@ Each must be run and its output recorded before handoff is considered complete.
 | # | Test | Required result |
 |---|---|---|
 | 1 | Passive path (all zero, prohibition, neutral) to Q40 | Deaths rise slowly, crime flat, `A` drifts down. Survivable to Q40 but poor. This is the floor. |
-| 2 | Maximum enforcement, nothing else | `M` sawtooths and does not trend down. `Phi` ratchets up and stays. `margin` spikes then decays as `Kill` recovers. Deaths rise. Crime rises. Centre initially rises, then falls. |
+| 2 | Maximum enforcement, nothing else | `[v2.1]` `Kill` sawtooths and does not trend down (`M` cannot: see §7.2). `Phi` ratchets up and stays. `margin` spikes then decays as `Kill` recovers. Deaths rise. Crime rises. Centre initially rises, then falls. |
 | 3 | Maximum treatment, moralised frame | Capacity builds, `W` falls, `Dtreat` stays flat. Money spent, nobody presents. |
-| 4 | Maximum harm reduction only | Deaths fall within two quarters. Traditional bloc falls sharply under moralised framing. Prevalence unchanged. |
+| 4 | Maximum harm reduction only | Deaths fall within two quarters — by 73%, not 55%: `H` reaches fatality through §7.6 *and* through `PhiVar` in §7.3 `[v2.1]`. Traditional bloc falls sharply under moralised framing. Prevalence unchanged. |
 | 5 | Immediate jump to `G=4` in Q1 | Coherence penalty fires, Traditional collapses, `A` collapses, administration falls at Q16. |
 | 6 | Gradual `G` escalation with medicalised frame and treatment funding | Best available death outcome, at the cost of raised prevalence via `norm`, and a hard fight at the first election. Survivable but not comfortable. |
 | 7 | Twelve-outcome sweep across a coarse grid | No configuration produces good outcomes for all twelve. Document the best found and who it fails. |
 | **7b** `[v2]` | **Same sweep, Dean excluded** | **No configuration produces good outcomes for the remaining eleven.** Confirm each of the three §9.1 conflicts is individually sufficient. |
-| **7c** `[v2]` | **Four-bloc sweep** | No configuration holds all four blocs above 50 for more than four consecutive quarters. |
+| **7c** `[v2]` | **Four-bloc sweep** | No configuration holds all four blocs above 50 for more than four consecutive quarters. `[v2.1]` Passes: longest streak 0 across 675 configurations; best config sacrifices Traditional at 48.4. |
 | 8 | Amber attribution | Every amber value has a chain that names a real prior decision. No amber without a chain; no chain older than the run. |
 | **8b** `[v2]` | **Disciplinary spread** | At Q20 under Test 6, ≥60% of active chains span two or more disciplines. |
 | **8c** `[v2]` | **Elasticity sanity** | Doubling `P` reduces initiation materially and reduces dependent-user quantity only slightly. Confirm the two elasticities are not accidentally transposed. |

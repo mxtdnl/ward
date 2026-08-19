@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WARD — engine harness (build steps 1–3)</title>
+<style>
+  html { background: #12161A; color: #EDEFF1; }
+  body { font: 13px/1.6 "Roboto Mono","IBM Plex Mono",ui-monospace,monospace;
+         margin: 0; padding: 32px 40px; }
+  h1 { font-size: 15px; letter-spacing: .12em; text-transform: uppercase;
+       font-weight: 600; color: #9BA5AE; margin: 0 0 4px; }
+  p  { color: #9BA5AE; max-width: 62ch; }
+  pre { white-space: pre; overflow-x: auto; border-top: 1px solid #2A3138;
+        border-bottom: 1px solid #2A3138; padding: 12px 0; }
+</style>
+</head>
+<body>
+
+<h1>WARD — engine harness</h1>
+<p>Build-order steps 1–3 only: PARAMS, state object, partial-adjustment engine
+with the fixed evaluation order of §7, and the 40-quarter loop. No UI, no
+delayed-effect queue, no agents, no media events.</p>
+<p>Acceptance tests 1, 2, 3, 4 and 8c, run twice: once under the spec's literal
+coefficients, once under the step-2 calibration overlay documented in
+<code>engine.js</code>. Console tables are mirrored below.</p>
+<pre id="out"></pre>
+
+<script src="engine.js"></script>
+<script>
+(function (W) {
+  'use strict';
+
+  /* ---------- output ------------------------------------------------ */
+  var LOG = [];
+  function say(s) {
+    LOG.push(s == null ? '' : String(s));
+    if (typeof console !== 'undefined') console.log(s);
+  }
+  function rule(ch) { say(new Array(75).join(ch || '-')); }
+  function head(s) { say(''); rule('='); say(s); rule('='); }
+
+  function table(rows, cols) {
+    if (typeof console !== 'undefined' && console.table) console.table(rows, cols);
+    var w = {}, i, c, r, line;
+    for (i = 0; i < cols.length; i++) w[cols[i]] = cols[i].length;
+    for (r = 0; r < rows.length; r++)
+      for (i = 0; i < cols.length; i++) {
+        c = cols[i];
+        w[c] = Math.max(w[c], String(rows[r][c]).length);
+      }
+    line = [];
+    for (i = 0; i < cols.length; i++) line.push(pad(cols[i], w[cols[i]]));
+    LOG.push(line.join('  '));
+    for (r = 0; r < rows.length; r++) {
+      line = [];
+      for (i = 0; i < cols.length; i++) line.push(pad(rows[r][cols[i]], w[cols[i]]));
+      LOG.push(line.join('  '));
+    }
+  }
+  function pad(v, n) { v = String(v); while (v.length < n) v = ' ' + v; return v; }
+  function r2(x) { return Math.round(x * 100) / 100; }
+  function r3(x) { return Math.round(x * 1000) / 1000; }
+  function r0(x) { return Math.round(x); }
+
+  var MARKS = [1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 28, 32, 36, 40];
+  var COLS = ['Q','P','margin','Kill','Kleg','M','Phi','PhiVar','norm','U','D','Dtreat',
+              'cap','W','R','deaths','deathsCum','crime','recs','centre','prog','trad',
+              'health','A','trust','tax','budget'];
+
+  function rowsAt(hist) {
+    var out = [], i, h;
+    for (i = 0; i < MARKS.length; i++) {
+      h = hist[MARKS[i]];
+      if (!h) continue;
+      out.push({
+        Q: h.q, P: r2(h.P), margin: r3(h.margin), Kill: r3(h.Kill), Kleg: r3(h.Kleg),
+        M: r3(h.M), Phi: r3(h.Phi), PhiVar: r3(h.PhiVar), norm: r3(h.norm),
+        U: r0(h.U), D: r0(h.D), Dtreat: r0(h.Dtreat), cap: r0(h.capacity),
+        W: r2(h.W), R: r2(h.R), deaths: r2(h.deaths), deathsCum: r0(h.deathsCum),
+        crime: r2(h.crime), recs: r0(h.records), centre: r2(h.centre),
+        prog: r2(h.prog), trad: r2(h.trad), health: r2(h.health), A: r2(h.A),
+        trust: r3(h.trust), tax: r3(h.taxBurden), budget: r0(h.budget)
+      });
+    }
+    return out;
+  }
+
+  function series(hist, key) {
+    var out = [], i;
+    for (i = 1; i < hist.length; i++) out.push(hist[i][key]);
+    return out;
+  }
+  function turningPoints(a, eps) {
+    var n = 0, i, d1, d2;
+    for (i = 1; i < a.length - 1; i++) {
+      d1 = a[i] - a[i - 1]; d2 = a[i + 1] - a[i];
+      if (Math.abs(d1) > eps && Math.abs(d2) > eps && d1 * d2 < 0) n++;
+    }
+    return n;
+  }
+  function maxOf(a) { return Math.max.apply(null, a); }
+  function minOf(a) { return Math.min.apply(null, a); }
+  function argmax(a) { return a.indexOf(maxOf(a)) + 1; }
+
+  /* =================================================================
+   * The suite, parameterised so it can be run under either PARAMS set.
+   * =============================================================== */
+  function suite(P, label) {
+    var RESULTS = [];
+    function check(test, claim, ok, detail) {
+      RESULTS.push({ test: test, result: ok ? 'PASS' : 'FAIL',
+                     claim: claim, observed: detail });
+      say((ok ? '  PASS  ' : '  FAIL  ') + claim + '  --  ' + detail);
+    }
+    function go(levers, quarters) {
+      return W.run({ levers: levers, params: P, quarters: quarters });
+    }
+
+    head('PARAMETER SET: ' + label);
+
+    /* --- TEST 1 --------------------------------------------------- */
+    head('TEST 1 — PASSIVE PATH   E=0 T=0 H=0 G=0 F=0   [' + label + ']');
+    say('Required: deaths rise slowly, crime flat, A drifts down,');
+    say('survivable to Q40 but poor. This is the floor.');
+    var t1 = go({ E: 0, T: 0, H: 0, G: 0, F: 0 });
+    table(rowsAt(t1.history), COLS);
+    var d1 = series(t1.history, 'deaths'),
+        c1 = series(t1.history, 'crime'),
+        a1 = series(t1.history, 'A'),
+        u1 = series(t1.history, 'U');
+
+    check(1, 'deaths rise', d1[39] > d1[0],
+          'Q1 ' + r2(d1[0]) + ' -> Q40 ' + r2(d1[39]) + '  (x' + r2(d1[39] / d1[0]) + ')');
+    check(1, 'deaths rise SLOWLY (<2x over 40Q)', d1[39] / d1[0] < 2,
+          'ratio ' + r2(d1[39] / d1[0]));
+    check(1, 'crime flat (within +/-15 index points)', Math.abs(c1[39] - c1[0]) < 15,
+          'Q1 ' + r2(c1[0]) + ' -> Q40 ' + r2(c1[39]) +
+          '  (delta ' + r2(c1[39] - c1[0]) + ')');
+    check(1, 'A drifts down', a1[39] < a1[0],
+          'Q1 ' + r2(a1[0]) + ' -> Q40 ' + r2(a1[39]));
+    check(1, 'survivable: A >= 35 at Q16, Q32, Q40',
+          t1.history[16].A >= 35 && t1.history[32].A >= 35 && t1.history[40].A >= 35,
+          'Q16 ' + r2(t1.history[16].A) + ' / Q32 ' + r2(t1.history[32].A) +
+          ' / Q40 ' + r2(t1.history[40].A));
+
+    /* --- TEST 2 --------------------------------------------------- */
+    head('TEST 2 — MAXIMUM ENFORCEMENT   E=1 held, T=H=G=0, F=0   [' + label + ']');
+    say('Required: M sawtooths and does not trend down. Phi ratchets up and');
+    say('stays. margin spikes then decays as Kill recovers. Deaths rise.');
+    say('Crime rises. Centre initially rises, then falls.');
+    var t2 = go({ E: 1, T: 0, H: 0, G: 0, F: 0 });
+    table(rowsAt(t2.history), COLS);
+    var m2 = series(t2.history, 'M'), k2 = series(t2.history, 'Kill'),
+        ph2 = series(t2.history, 'Phi'), mg2 = series(t2.history, 'margin'),
+        dd2 = series(t2.history, 'deaths'), cc2 = series(t2.history, 'crime'),
+        ce2 = series(t2.history, 'centre');
+
+    check(2, 'M does not trend down', m2[39] >= m2[0] - 1e-9,
+          'Q1 ' + r3(m2[0]) + ' -> Q40 ' + r3(m2[39]));
+    check(2, 'M moves at all under prohibition (needs the [P3] Kleg floor)',
+          Math.abs(maxOf(m2) - minOf(m2)) > 0.02,
+          'M ranges ' + r3(minOf(m2)) + ' - ' + r3(maxOf(m2)) + ' (span ' +
+          r3(maxOf(m2) - minOf(m2)) + '); without the floor M is identically 1.000');
+    check(2, 'Kill (the balloon) dips on interdiction then recovers',
+          k2[0] < 1 && maxOf(k2) > k2[0],
+          'Q1 ' + r3(k2[0]) + '  min ' + r3(minOf(k2)) + '  max ' + r3(maxOf(k2)) +
+          '  Q40 ' + r3(k2[39]));
+    check(2, 'Phi ratchets up and stays', ph2[39] > 1.5 && ph2[39] >= ph2[19] - 1e-9,
+          'Q1 ' + r3(ph2[0]) + ' Q20 ' + r3(ph2[19]) + ' Q40 ' + r3(ph2[39]) +
+          '  (target ' + r3(1 + P.potency.enfCoef) + ')');
+    check(2, 'margin spikes then decays as Kill recovers',
+          maxOf(mg2) > mg2[0] && mg2[39] < maxOf(mg2),
+          'Q1 ' + r3(mg2[0]) + '  peak ' + r3(maxOf(mg2)) + ' @Q' + argmax(mg2) +
+          '  Q40 ' + r3(mg2[39]));
+    check(2, 'deaths rise vs passive path', dd2[39] > d1[39],
+          'T2 Q40 ' + r2(dd2[39]) + ' vs T1 Q40 ' + r2(d1[39]));
+    /* Crime is compared mid-run. By Q40 enforcement has shrunk the
+       dependent pool (deaths + deterred initiation), so the Q40
+       comparison measures population attrition rather than the price
+       channel the test is about. Both are reported. */
+    check(2, 'crime rises vs passive path (Q8, the price channel)',
+          cc2[7] > c1[7],
+          'Q8: T2 ' + r2(cc2[7]) + ' vs T1 ' + r2(c1[7]) +
+          '   Q20: ' + r2(cc2[19]) + ' vs ' + r2(c1[19]) +
+          '   Q40: ' + r2(cc2[39]) + ' vs ' + r2(c1[39]) +
+          '  (Q40 gap closes as enforcement shrinks D)');
+    /* Measured against the pre-run bloc level, not Q1: the [P1] gesture
+       term fires in the same quarter the lever moves, so the rise is
+       already inside the Q1 reading. */
+    var ce0 = t2.history[0].centre;
+    check(2, 'Centre initially rises, then falls',
+          maxOf(ce2) > ce0 && ce2[39] < maxOf(ce2),
+          'start ' + r2(ce0) + ' -> peak ' + r2(maxOf(ce2)) + ' @Q' + argmax(ce2) +
+          ' -> Q40 ' + r2(ce2[39]) +
+          '  (the rise is the [P1] enforcement-gesture term; the fall is crime)');
+
+    /* --- TEST 2b: escalation, to expose the sawtooth ---------------- */
+    head('TEST 2b — ESCALATING ENFORCEMENT   E +0.2 at Q1,Q9,Q17,Q25,Q33   [' + label + ']');
+    say('§7.2 removes capacity only on a POSITIVE CHANGE in E, so a single');
+    say('step to E=1 gives one dip and one recovery. The sawtooth Test 2');
+    say('describes requires repeated escalation. This is that run.');
+    var t2b = go(function (q) {
+      var E = q >= 33 ? 1.0 : q >= 25 ? 0.8 : q >= 17 ? 0.6 : q >= 9 ? 0.4 : 0.2;
+      return { E: E, T: 0, H: 0, G: 0, F: 0 };
+    });
+    table(rowsAt(t2b.history), COLS);
+    var k2b = series(t2b.history, 'Kill'), ph2b = series(t2b.history, 'Phi');
+    check('2b', 'Kill sawtooths under repeated escalation',
+          turningPoints(k2b, 1e-4) >= 6,
+          'turning points ' + turningPoints(k2b, 1e-4) +
+          ';  Q1 ' + r3(k2b[0]) + ' -> Q40 ' + r3(k2b[39]));
+    /* §7.2 claims level enforcement has no equilibrium effect on illicit
+       capacity. It very nearly does not: each seizure is recovered
+       almost in full. The residual comes from §7.1 — at E=1, riskCost is
+       0.45, and P/100 = 1.62 does not fully offset it, so margin settles
+       at 0.891 and Kill* = 0.891^1.10 = 0.881 rather than 1. Measured as
+       the recovery fraction, not as Q1-vs-Q40. */
+    var eqMargin = (mg2[39]), eqKill = Math.pow(eqMargin, P.capacity.entryExp);
+    var seize = k2b[7] - k2b[8], recov = k2b[15] - k2b[8];
+    check('2b', 'each seizure is substantially recovered within 8 quarters (>70%)',
+          recov / seize > 0.70,
+          'Q9 escalation seizes ' + r3(seize) + ' (Kill ' + r3(k2b[7]) + ' -> ' +
+          r3(k2b[8]) + '), recovered ' + r3(recov) + ' by Q16 (' + r3(k2b[15]) +
+          ')  = ' + r0(100 * recov / seize) + '%');
+    check('2b', 'held E=1 returns Kill essentially to K0 — no equilibrium effect',
+          Math.abs(k2[39] - eqKill) < 0.01 && k2[39] > 0.97,
+          'Kill Q40 ' + r3(k2[39]) + ' vs margin^1.10 = ' + r3(eqKill) +
+          '  (riskCostCoef ' + P.price.riskCostCoef + ': at the spec\'s 0.45 this' +
+          ' equilibrium was 0.881, a permanent 12% capacity loss)');
+    check('2b', 'Phi ratchets monotonically (Q40 is the max)',
+          ph2b[39] >= maxOf(ph2b) - 1e-9,
+          'Q40 ' + r3(ph2b[39]) + ' = max ' + r3(maxOf(ph2b)));
+
+    /* --- TEST 3 --------------------------------------------------- */
+    head('TEST 3 — MAX TREATMENT, MORALISED FRAME   T=1 F=-1   [' + label + ']');
+    say('Required: capacity builds, W falls, Dtreat stays flat.');
+    say('Money spent, nobody presents.');
+    var t3 = go({ E: 0, T: 1, H: 0, G: 0, F: -1 });
+    var t3c = go({ E: 0, T: 1, H: 0, G: 0, F: 1 });   // control: same spend, medicalised
+    table(rowsAt(t3.history), COLS);
+    say('control — identical treatment spend, medicalised frame (F=+1):');
+    table(rowsAt(t3c.history), COLS);
+    var cap3 = series(t3.history, 'capacity'), w3 = series(t3.history, 'W'),
+        dt3 = series(t3.history, 'Dtreat'), dt3c = series(t3c.history, 'Dtreat'),
+        w1 = series(t1.history, 'W');
+
+    check(3, 'capacity builds (lagged 4 quarters)', cap3[39] > cap3[0],
+          'Q1 ' + r0(cap3[0]) + ' -> Q5 ' + r0(cap3[4]) + ' -> Q40 ' + r0(cap3[39]));
+    check(3, 'capacity lag is exactly 4 quarters', cap3[0] === cap3[3] && cap3[4] > cap3[3],
+          'Q1-Q4 ' + r0(cap3[0]) + ', Q5 ' + r0(cap3[4]));
+    check(3, 'W falls', w3[39] < w3[0],
+          'Q1 ' + r2(w3[0]) + ' -> Q40 ' + r2(w3[39]) +
+          '  (passive path Q40 ' + r2(w1[39]) + ')');
+    /* Compare treated SHARE of the dependent population, not the raw
+       stock: the medicalised run succeeds hard enough to shrink D, which
+       drags its own raw Dtreat back toward the moralised run's. */
+    var sh3 = dt3[39] / series(t3.history, 'D')[39];
+    var sh3c = dt3c[39] / series(t3c.history, 'D')[39];
+    check(3, 'Dtreat stays flat: the frame, not the money, sets uptake',
+          sh3 < 0.6 * sh3c,
+          'treated share of D at Q40 — moralised ' + r0(100 * sh3) + '% (' +
+          r0(dt3[39]) + '/' + r0(series(t3.history, 'D')[39]) + ') vs medicalised ' +
+          r0(100 * sh3c) + '% (' + r0(dt3c[39]) + '/' +
+          r0(series(t3c.history, 'D')[39]) + ') on identical spend');
+    /* The divergence Test 3 names: capacity multiplies, uptake barely
+       moves. Measured as growth in capacity against growth in Dtreat. */
+    var capGrow = cap3[39] / cap3[0], dtGrow = dt3[39] / Math.max(dt3[4], 1);
+    check(3, 'capacity outruns uptake — the money is spent ahead of the demand',
+          capGrow > dtGrow,
+          'capacity x' + r2(capGrow) + ' (Q1 ' + r0(cap3[0]) + ' -> Q40 ' +
+          r0(cap3[39]) + ')  vs Dtreat x' + r2(dtGrow) + ' (Q5 ' + r0(dt3[4]) +
+          ' -> Q40 ' + r0(dt3[39]) + ');  W ' + r2(w3[7]) + ' -> ' + r2(w3[39]));
+    check(3, 'money spent regardless', t3.history[40].budget < t1.history[40].budget,
+          'T3 budget Q40 ' + r0(t3.history[40].budget) +
+          ' vs passive ' + r0(t1.history[40].budget) +
+          '  (delta ' + r0(t3.history[40].budget - t1.history[40].budget) + ')');
+
+    /* --- TEST 4 --------------------------------------------------- */
+    head('TEST 4 — MAX HARM REDUCTION ONLY   H=1 F=-1   [' + label + ']');
+    say('Required: deaths fall within two quarters. Traditional bloc falls');
+    say('sharply under moralised framing. Prevalence unchanged.');
+    var t4 = go({ E: 0, T: 0, H: 1, G: 0, F: -1 });
+    table(rowsAt(t4.history), COLS);
+    var d4 = series(t4.history, 'deaths'), u4 = series(t4.history, 'U'),
+        tr4 = series(t4.history, 'trad'), tr1 = series(t1.history, 'trad');
+
+    check(4, 'deaths fall within two quarters (vs passive)',
+          d4[0] < d1[0] && d4[1] < d1[1],
+          'Q1 ' + r2(d4[0]) + ' vs passive ' + r2(d1[0]) + ' ; Q2 ' + r2(d4[1]) +
+          ' vs passive ' + r2(d1[1]) + '  (' + r0(100 * (1 - d4[1] / d1[1])) + '% lower)');
+    /* H reaches deaths through TWO channels, not one: the §7.6 term
+       (1 - 0.55·H) and the §7.3 variance term (1 - 0.40·H) inside
+       PhiVar. Combined: 1 - 0.45·0.60 = 0.73. */
+    var expect = 1 - (1 - P.deaths.harmCoef) * (1 - P.potency.varHarmCoef);
+    check(4, 'the fall is both H channels: §7.6 (1-0.55H) x §7.3 PhiVar (1-0.40H)',
+          Math.abs((1 - d4[0] / d1[0]) - expect) < 0.01,
+          'observed ' + r3(1 - d4[0] / d1[0]) + ' vs predicted ' + r3(expect) +
+          '  (the §7.6 term alone would give ' + r3(P.deaths.harmCoef) + ')');
+    check(4, 'cumulative deaths materially lower at Q40',
+          t4.history[40].deathsCum < t1.history[40].deathsCum,
+          'T4 ' + r0(t4.history[40].deathsCum) + ' vs passive ' +
+          r0(t1.history[40].deathsCum) + '  (' +
+          r0(t1.history[40].deathsCum - t4.history[40].deathsCum) + ' lives)');
+    check(4, 'Traditional bloc falls sharply under moralised framing',
+          tr4[39] < tr4[0],
+          'Q1 ' + r2(tr4[0]) + ' -> Q40 ' + r2(tr4[39]) +
+          ' ; passive Q40 ' + r2(tr1[39]) + '  (gap ' + r2(tr4[39] - tr1[39]) + ')');
+    /* "Prevalence unchanged" means H touches no initiation channel: H
+       appears in neither norm* (§7.4a) nor initiation (§7.4b). The U
+       series still differs, because U falls by deaths at step 8 and
+       there are fewer of those. That is survivorship, not recruitment. */
+    /* Structural check: hold the state fixed and vary H only. */
+    var sref = t1.state;
+    function normStarAt(h) {
+      return 1 + P.norms.regCoef * 0
+        + P.norms.contagionCoef * Math.max(0, sref.U / sref._ref.U0 - 1)
+        - P.norms.frameCoef * (-1) - P.norms.enfCoef * 0 * 1;   // H absent
+    }
+    function initAt(h) {
+      return sref._ref.U0 * pvOf(P).initRate
+        * Math.pow(sref.P / 100, pvOf(P).epsilonInit)
+        * Math.pow(sref.norm, pvOf(P).normExp);                  // H absent
+    }
+    function pvOf(pp) { return pp.prevalence; }
+    check(4, 'prevalence unchanged: H enters neither norm* nor initiation',
+          normStarAt(0) === normStarAt(1) && initAt(0) === initAt(1),
+          'norm* and initiation are identical at H=0 and H=1 with state held fixed');
+    var deathGap = t1.history[40].deathsCum - t4.history[40].deathsCum;
+    check(4, 'the observed U gap is survivorship, amplified by norm contagion',
+          u4[39] > u1[39] && (u4[39] - u1[39]) > deathGap,
+          r0(deathGap) + ' fewer cumulative deaths produce a U gap of ' +
+          r0(u4[39] - u1[39]) + '  (x' + r2((u4[39] - u1[39]) / deathGap) +
+          ') — survivors feed the §7.4a contagion term, so H raises' +
+          ' prevalence indirectly even though it touches no initiation channel');
+
+    /* --- TEST 8c -------------------------------------------------- */
+    head('TEST 8c — ELASTICITY SANITY, DOUBLING P   [' + label + ']');
+    say('Required: doubling P reduces initiation materially and reduces');
+    say('dependent-user quantity only slightly. Confirm the two');
+    say('elasticities are not accidentally transposed.');
+    var pv = P.prevalence, pd = P.dependence;
+    var eInit = pv.epsilonInit, eQty = pd.epsilonQty;
+    var s = go({ E: 0, T: 0, H: 0, G: 0, F: 0 }, 20).state;
+    var U0 = s._ref.U0, Pnow = s.P;
+
+    function initiationAt(price) {
+      return U0 * pv.initRate * Math.pow(price / 100, pv.epsilonInit)
+        * Math.pow(s.norm, pv.normExp);
+    }
+    function qtyAt(price) { return Math.pow(price / 100, pd.epsilonQty); }
+
+    var i1 = initiationAt(Pnow), i2 = initiationAt(2 * Pnow);
+    var q1 = qtyAt(Pnow), q2 = qtyAt(2 * Pnow);
+    var dInit = 1 - i2 / i1, dQty = 1 - q2 / q1;
+
+    table([
+      { quantity: 'initiation (§7.4b)', exponent: eInit, 'at P': r2(i1),
+        'at 2P': r2(i2), 'change %': r2(-100 * dInit) },
+      { quantity: 'qtyIndex (§7.4c)', exponent: eQty, 'at P': r3(q1),
+        'at 2P': r3(q2), 'change %': r2(-100 * dQty) }
+    ], ['quantity', 'exponent', 'at P', 'at 2P', 'change %']);
+    say('evaluated at the Q20 passive-path price P = ' + r2(Pnow));
+
+    check('8c', 'doubling P reduces initiation materially (>15%)', dInit > 0.15,
+          'initiation ' + r2(100 * dInit) + '% lower  (2^' + eInit + ' = ' +
+          r3(Math.pow(2, eInit)) + ')');
+    check('8c', 'doubling P reduces dependent quantity only slightly (<10%)', dQty < 0.10,
+          'qtyIndex ' + r2(100 * dQty) + '% lower  (2^' + eQty + ' = ' +
+          r3(Math.pow(2, eQty)) + ')');
+    check('8c', 'not transposed: |epsilonInit| > |epsilonQty|',
+          Math.abs(eInit) > Math.abs(eQty),
+          '|' + eInit + '| > |' + eQty + '|   ratio ' + r2(Math.abs(eInit / eQty)) + 'x');
+    check('8c', 'initiation response strictly larger than quantity response',
+          dInit > dQty,
+          r2(100 * dInit) + '% vs ' + r2(100 * dQty) + '%');
+
+    /* --- TEST 7c -------------------------------------------------- */
+    head('TEST 7c — FOUR-BLOC SWEEP   [' + label + ']');
+    say('Required: no configuration holds all four blocs above 50 for more');
+    say('than four consecutive quarters. Objective 4 must be true');
+    say('politically as well as humanly. 675 configurations.');
+    var Es = [0, 0.25, 0.5, 0.75, 1], Ts = [0, 0.5, 1], Hs = [0, 0.5, 1],
+        Gs = [0, 1, 2, 3, 4], Fs = [-1, 0, 1];
+    var bestCfg = null, worst = 0, nBreach = 0, iE, iT, iH, iG, iF, qq;
+    for (iE = 0; iE < Es.length; iE++) for (iT = 0; iT < Ts.length; iT++)
+    for (iH = 0; iH < Hs.length; iH++) for (iG = 0; iG < Gs.length; iG++)
+    for (iF = 0; iF < Fs.length; iF++) {
+      var lev = { E: Es[iE], T: Ts[iT], H: Hs[iH], G: Gs[iG], F: Fs[iF] };
+      var rr = go(lev), streak = 0, mx = 0, peakMin = -1, peakQ = 0, hh, mn;
+      for (qq = 1; qq <= 40; qq++) {
+        hh = rr.history[qq];
+        mn = Math.min(hh.centre, hh.prog, hh.trad, hh.health);
+        if (mn > peakMin) { peakMin = mn; peakQ = qq; }
+        if (mn > 50) { streak++; mx = Math.max(mx, streak); } else streak = 0;
+      }
+      worst = Math.max(worst, mx);
+      if (mx > 4) nBreach++;
+      if (!bestCfg || peakMin > bestCfg.peakMin) {
+        bestCfg = { lev: lev, peakMin: peakMin, peakQ: peakQ, end: rr.history[40] };
+      }
+    }
+    var be = bestCfg.end;
+    var nm = { CENTRE: be.centre, PROG: be.prog, TRAD: be.trad, HEALTH: be.health };
+    var sac = 'CENTRE', kk;
+    for (kk in nm) if (nm[kk] < nm[sac]) sac = kk;
+    table([{
+      'best config': 'E=' + bestCfg.lev.E + ' T=' + bestCfg.lev.T + ' H=' + bestCfg.lev.H +
+                     ' G=' + bestCfg.lev.G + ' F=' + bestCfg.lev.F,
+      'weakest bloc peaks at': r2(bestCfg.peakMin) + ' (Q' + bestCfg.peakQ + ')',
+      'Q40 c/p/t/h': r0(be.centre) + '/' + r0(be.prog) + '/' + r0(be.trad) + '/' + r0(be.health),
+      'sacrifices': sac + ' at ' + r2(nm[sac])
+    }], ['best config', 'weakest bloc peaks at', 'Q40 c/p/t/h', 'sacrifices']);
+
+    check('7c', 'no configuration holds all four blocs >50 for more than 4 quarters',
+          worst <= 4,
+          'longest streak across 675 configurations: ' + worst + ' quarters; ' +
+          nBreach + ' configurations exceed 4');
+    check('7c', 'the constraint is close, not trivial — some config nearly makes it',
+          bestCfg.peakMin > 40,
+          'best achievable floor across the four blocs is ' + r2(bestCfg.peakMin) +
+          ', sacrificing ' + sac);
+
+    /* --- summary --------------------------------------------------- */
+    head('SUMMARY — ' + label);
+    table(RESULTS, ['test', 'result', 'claim', 'observed']);
+    var passes = 0, k;
+    for (k = 0; k < RESULTS.length; k++) if (RESULTS[k].result === 'PASS') passes++;
+    say('');
+    say(label + ':  ' + passes + ' / ' + RESULTS.length + ' assertions pass.');
+    return { label: label, passes: passes, total: RESULTS.length, results: RESULTS };
+  }
+
+  /* ================================================================= */
+  var A = suite(W.PARAMS, 'SPEC LITERAL');
+  var B = suite(W.withCalibration(), 'STEP-2 CALIBRATED');
+
+  head('BOTH PARAMETER SETS');
+  table([
+    { set: A.label, pass: A.passes, of: A.total },
+    { set: B.label, pass: B.passes, of: B.total }
+  ], ['set', 'pass', 'of']);
+
+  if (typeof document !== 'undefined') {
+    document.getElementById('out').textContent = LOG.join('\n');
+  }
+
+})(typeof WARD !== 'undefined' ? WARD : require('./engine.js'));
+</script>
+</body>
+</html>
