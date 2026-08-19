@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WARD — acceptance tests 7, 7b, 7c (build steps 7–8)</title>
+<style>
+  html { background: #12161A; color: #EDEFF1; }
+  body { font: 13px/1.6 "Roboto Mono","IBM Plex Mono",ui-monospace,monospace;
+         margin: 0; padding: 32px 40px; }
+  h1 { font-size: 15px; letter-spacing: .12em; text-transform: uppercase;
+       font-weight: 600; color: #9BA5AE; margin: 0 0 4px; }
+  p  { color: #9BA5AE; max-width: 62ch; }
+  code { color: #EDEFF1; }
+  pre { white-space: pre-wrap; overflow-x: auto; border-top: 1px solid #2A3138;
+        border-bottom: 1px solid #2A3138; padding: 12px 0; }
+</style>
+</head>
+<body>
+
+<h1>WARD — the twelve and the four blocs</h1>
+<p>Build-order steps 7 and 8, headless: the twelve named individuals with their
+§9 attributes and per-person update, and the constituency readings the
+coalition strip and §10’s election screen are built from. No rendering, no
+portraits, no lens — those are the parts of steps 7–8 that need step 4’s canvas.</p>
+<p><strong>Test 7</strong> sweeps the coarse grid and asks whether any
+configuration is good for all twelve. <strong>Test 7b</strong> asks the same
+question with Dean excluded, and additionally checks that each of §9.1’s three
+conflicts — Callum against Errol, Aisha against Tomas, Priya against the person
+enforcement protects — is on its own enough to rule out a dominating
+configuration, and that no single agent has quietly taken Dean’s place as the
+guarantor. <strong>Test 7c</strong> reads the four-bloc constraint off the same
+675 runs.</p>
+<p>A good ten-year outcome is defined in the suite’s <code>THRESHOLDS</code>:
+stability of at least 60 at Q40, and not in crisis, incarcerated or deceased.
+§9 does not define one, so the definition is stated where a retune can find it.</p>
+<p>Run under both parameter sets, as <code>harness.html</code> does. Under
+<em>spec literal</em>, treatment capacity is mis-scaled by ×20 against §7.5’s
+own initial state — the step-2 calibration issue documented in
+<code>engine.js</code> — so the queue never clears, nobody presents, and Marek,
+Nadia, Gareth and Lily cannot end well under any configuration. That is the
+same pre-existing failure <code>harness.html</code> reports there, not a new
+one.</p>
+<pre id="out"></pre>
+
+<script src="engine.js"></script>
+<script src="tests-twelve.js"></script>
+<script>
+(function (W, T) {
+  'use strict';
+  var LOG = [];
+  function say(s) {
+    LOG.push(s == null ? '' : String(s));
+    if (typeof console !== 'undefined') console.log(s);
+  }
+
+  var A = T.suite(W.PARAMS, 'SPEC LITERAL', say);
+  var B = T.suite(W.withCalibration(), 'STEP-2 CALIBRATED', say);
+
+  say('');
+  say(new Array(75).join('='));
+  say('BOTH PARAMETER SETS');
+  say(new Array(75).join('='));
+  [A, B].forEach(function (s) {
+    say('  ' + s.label + ':  PASS ' + s.pass + '   FAIL ' + s.fail);
+  });
+
+  if (typeof document !== 'undefined') {
+    document.getElementById('out').textContent = LOG.join('\n');
+  }
+})(WARD, WARD_TWELVE);
+</script>
+</body>
+</html>

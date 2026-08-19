@@ -1,13 +1,19 @@
 /* =====================================================================
  * WARD — Region of Alder
- * Build-order steps 1-3: PARAMS, state object, partial-adjustment engine
- * with the fixed evaluation order of §7, and the 40-quarter loop.
+ * Build-order steps 1-3, 7 and 8: PARAMS, state object, partial-
+ * adjustment engine with the fixed evaluation order of §7, the
+ * 40-quarter loop, the twelve named individuals (§9), and the four
+ * constituencies with the readings the coalition strip is built from
+ * (§7.8, §10).
  *
  * A model, not a forecast. Every relationship here is simplified;
  * every number is invented.
  *
- * No UI, no rendering, no delayed-effect queue (step 6), no agents
- * (step 7), no media events (step 10). Those are later checkpoints.
+ * No UI, no rendering, no delayed-effect queue (step 6), no media
+ * events (step 10). Steps 7 and 8 are present only in their headless
+ * parts: the per-person model and the bloc readings, not the portrait
+ * moments, the trace bank or the disciplinary lens, all of which need
+ * step 4's canvas.
  *
  * EVERY coefficient lives in PARAMS below. Nothing numeric outside it.
  *
@@ -272,15 +278,172 @@
     /* --- §12 salience ---------------------------------------------- */
     salience: { decay: 0.75 },
 
-    /* --- §9 the twelve: discountRate only -------------------------- *
-     * Step 7 builds the agents. §7.5 needs meanDiscount now, so the
-     * discountRate column is declared here. Errol highest, Marek next,
-     * per the design functions in §9.                                 */
-    twelveDiscountRate: {
-      Marek: 0.85, Aisha: 0.55, Dean: 0.40, Ruth: 0.35,
-      Callum: 0.70, Nadia: 0.30, Errol: 0.95, Priya: 0.25,
-      Tomas: 0.45, Shauna: 0.60, Gareth: 0.35, Lily: 0.20
-    }
+    /* --- §9 the twelve: global coefficients ------------------------ *
+     * Build-order step 7. Every person's stability is a partial
+     * adjustment toward a target, in the form §7 uses for every other
+     * variable. The target is the population state filtered through
+     * that person's own attributes: base + resilience − their own
+     * trajectory + the sum of the weighted channels in `twelve` below.
+     * Nothing here is stochastic: the twelve must be reproducible
+     * across sections (§11, Test 11), so hazards accumulate rather
+     * than being sampled.                                             */
+    people: {
+      base: 52,                  // baseline target stability, before attributes
+      supportCoef: 16,           // + supportCoef·socialSupport — resilience
+      adjust: 0.18,              // stability += 0.18·(target − stability)
+      min: 0, max: 100,
+      bandStable: 70,            // at or above -> `stable`
+      bandPrecarious: 45,        // below -> `crisis`
+      spillRef: 55,              // §9 Lily's reference for her sibling's trace
+      presThreshold: 0.030,      // personal presentation propensity to enter treatment
+      treatEntryBand: 60,        // only someone below this presents at all
+      presLeaveThreshold: 0.018, // below this an in-treatment person leaves
+      recoverQuarters: 6,        // consecutive quarters treated before `recovered`
+      recoverRetention: 0.55,    // ... and R must be at least this
+      relapseBand: 45,           // §9 `recovered` reverts to `precarious` below this
+      hazardBase: 0.012,         // fatal hazard/quarter at riskExposure 1, PhiVar0, H=0
+      hazardHarmCoef: 0.55,      // harm reduction on the individual hazard, as §7.6
+      hazardCrisis: 2.5,         // hazard multiplier in crisis
+      hazardPrecarious: 1.0,
+      hazardStable: 0.25,
+      hazardTreat: 0.35,         // multiplier while in treatment
+      hazardFatal: 1.0,          // accumulated hazard at which the trace goes flat
+      recordThresholdE: 0.40,    // §9.1 "any E > 0.4 ..."
+      recordQuarters: 8,         // "... sustained for eight quarters" -> a record
+      incarcThresholdQ: 6,       // enforcement-exposure quarters before a spell
+      incarcQuarters: 4,         // length of a spell
+      incarcFloor: 30            // stability target while incarcerated
+    },
+
+    /* --- §9 the twelve: attributes and channel weights ------------- *
+     * `attrs` are the §9 schema, all 0-1. `w` are stability points at a
+     * signal of 1, signed: positive means the signal helps that person.
+     * Channels, and the attribute each is filtered through:
+     *   treat   T · exp(−discountRate·W/13)      [PSY] discounting a place
+     *   queue   max(0, W/W0 − 1) · dr/meanDr     [PSY] the queue deters
+     *   harm    H
+     *   enf     E·(1−g)
+     *   trust   (trust − trust0) · (1 − serviceTrust)
+     *   frame   F · stigmaSensitivity
+     *   reg     g
+     *   price   (P/100 − 1) · incomeDependence
+     *   varq    (PhiVar/PhiVar0 − 1) · riskExposure
+     *   norm    (norm − 1) · normSensitivity
+     *   mkt     (Kill/K0 − 1)
+     *   regStep 1 when G >= regStepTier
+     *   record  1 once a possession record has been issued
+     *   spill   (sibling's stability last quarter − spillRef)
+     * `pressure` is the person's own trajectory in the absence of any
+     * policy: what the model says about them before the cabinet acts.  */
+    twelve: [
+      { name: 'Marek', age: 34, state0: 'precarious', stability0: 48,
+        pressure: 10, reachable: true, incarcRisk: 0.2, recordRisk: 0.6,
+        attrs: { discountRate: 0.85, normSensitivity: 0.35, stigmaSensitivity: 0.40,
+                 serviceTrust: 0.60, riskExposure: 0.75, socialSupport: 0.45,
+                 incomeDependence: 0.30 },
+        w: { treat: 44, queue: -34, harm: 6, enf: -6, trust: 8, frame: 6,
+             reg: 2, price: -8, varq: -8, norm: -6, mkt: 0, regStep: 0,
+             record: -6, spill: 0 } },
+
+      { name: 'Aisha', age: 19, state0: 'stable', stability0: 72,
+        pressure: 4, reachable: false, incarcRisk: 0.1, recordRisk: 0.8,
+        attrs: { discountRate: 0.55, normSensitivity: 0.90, stigmaSensitivity: 0.30,
+                 serviceTrust: 0.55, riskExposure: 0.35, socialSupport: 0.70,
+                 incomeDependence: 0.15 },
+        w: { treat: 0, queue: 0, harm: 0, enf: -4, trust: 2, frame: 2,
+             reg: -32, price: 3, varq: -6, norm: -90, mkt: 0, regStep: 0,
+             record: -10, spill: 0 } },
+
+      { name: 'Dean', age: 27, state0: 'stable', stability0: 60,
+        pressure: -6, reachable: false, incarcRisk: 1.0, recordRisk: 0.4,
+        attrs: { discountRate: 0.40, normSensitivity: 0.30, stigmaSensitivity: 0.25,
+                 serviceTrust: 0.20, riskExposure: 0.70, socialSupport: 0.30,
+                 incomeDependence: 0.95 },
+        w: { treat: 0, queue: 0, harm: 0, enf: -8, trust: 0, frame: 0,
+             reg: -30, price: 22, varq: 0, norm: 4, mkt: 30, regStep: -25,
+             record: -8, spill: 0 }, regStepTier: 3 },
+
+      { name: 'Ruth', age: 52, state0: 'precarious', stability0: 55,
+        pressure: 9, reachable: true, incarcRisk: 0, recordRisk: 0.1,
+        attrs: { discountRate: 0.35, normSensitivity: 0.25, stigmaSensitivity: 0.95,
+                 serviceTrust: 0.35, riskExposure: 0.55, socialSupport: 0.55,
+                 incomeDependence: 0.25 },
+        w: { treat: 20, queue: -12, harm: 4, enf: -5, trust: 6, frame: 34,
+             reg: 4, price: -4, varq: -5, norm: -4, mkt: 0, regStep: 0,
+             record: -6, spill: 0 } },
+
+      { name: 'Callum', age: 16, state0: 'precarious', stability0: 66,
+        pressure: 20, reachable: false, incarcRisk: 0.2, recordRisk: 0.9,
+        attrs: { discountRate: 0.70, normSensitivity: 0.95, stigmaSensitivity: 0.45,
+                 serviceTrust: 0.50, riskExposure: 0.45, socialSupport: 0.65,
+                 incomeDependence: 0.10 },
+        w: { treat: 0, queue: 0, harm: 0, enf: 34, trust: 2, frame: 0,
+             reg: -12, price: 10, varq: -5, norm: -40, mkt: 0, regStep: 0,
+             record: -10, spill: 0 } },
+
+      { name: 'Nadia', age: 41, state0: 'recovered', stability0: 58,
+        pressure: 8, reachable: true, incarcRisk: 0, recordRisk: 0.2,
+        attrs: { discountRate: 0.30, normSensitivity: 0.40, stigmaSensitivity: 0.60,
+                 serviceTrust: 0.65, riskExposure: 0.50, socialSupport: 0.60,
+                 incomeDependence: 0.25 },
+        w: { treat: 26, queue: -16, harm: 3, enf: -5, trust: 24, frame: 6,
+             reg: 0, price: -4, varq: -5, norm: -8, mkt: 0, regStep: 0,
+             record: -6, spill: 0 } },
+
+      { name: 'Errol', age: 38, state0: 'crisis', stability0: 30,
+        pressure: 16, reachable: false, incarcRisk: 0.6, recordRisk: 0.7,
+        attrs: { discountRate: 0.95, normSensitivity: 0.30, stigmaSensitivity: 0.55,
+                 serviceTrust: 0.10, riskExposure: 0.95, socialSupport: 0.10,
+                 incomeDependence: 0.35 },
+        w: { treat: 0, queue: 0, harm: 44, enf: -34, trust: 22, frame: 3,
+             reg: 6, price: -8, varq: -12, norm: 0, mkt: 0, regStep: 0,
+             record: -6, spill: 0 } },
+
+      { name: 'Priya', age: 23, state0: 'stable', stability0: 78,
+        pressure: 0, reachable: false, incarcRisk: 0.05, recordRisk: 1.0,
+        attrs: { discountRate: 0.25, normSensitivity: 0.35, stigmaSensitivity: 0.50,
+                 serviceTrust: 0.60, riskExposure: 0.20, socialSupport: 0.80,
+                 incomeDependence: 0.20 },
+        w: { treat: 0, queue: 0, harm: 0, enf: -6, trust: 2, frame: 2,
+             reg: 3, price: -2, varq: -3, norm: -4, mkt: 0, regStep: 0,
+             record: -40, spill: 0 } },
+
+      { name: 'Tomas', age: 45, state0: 'precarious', stability0: 50,
+        pressure: 16, reachable: true, incarcRisk: 0.1, recordRisk: 0.5,
+        attrs: { discountRate: 0.45, normSensitivity: 0.25, stigmaSensitivity: 0.45,
+                 serviceTrust: 0.40, riskExposure: 0.85, socialSupport: 0.40,
+                 incomeDependence: 0.30 },
+        w: { treat: 2, queue: -6, harm: 0, enf: -6, trust: 6, frame: 4,
+             reg: 30, price: -8, varq: -20, norm: -3, mkt: 0, regStep: 0,
+             record: -6, spill: 0 } },
+
+      { name: 'Shauna', age: 30, state0: 'crisis', stability0: 40,
+        pressure: 14, reachable: true, incarcRisk: 0.4, recordRisk: 0.7,
+        attrs: { discountRate: 0.60, normSensitivity: 0.40, stigmaSensitivity: 0.70,
+                 serviceTrust: 0.05, riskExposure: 0.80, socialSupport: 0.20,
+                 incomeDependence: 0.55 },
+        w: { treat: 10, queue: -8, harm: 14, enf: -18, trust: 40, frame: 8,
+             reg: 6, price: -6, varq: -8, norm: 0, mkt: 0, regStep: 0,
+             record: -8, spill: 0 } },
+
+      { name: 'Gareth', age: 61, state0: 'precarious', stability0: 52,
+        pressure: 10, reachable: true, incarcRisk: 0, recordRisk: 0.1,
+        attrs: { discountRate: 0.35, normSensitivity: 0.20, stigmaSensitivity: 0.55,
+                 serviceTrust: 0.70, riskExposure: 0.60, socialSupport: 0.35,
+                 incomeDependence: 0.20 },
+        w: { treat: 24, queue: -10, harm: 4, enf: -3, trust: 8, frame: 12,
+             reg: 4, price: -3, varq: -4, norm: -3, mkt: 0, regStep: 0,
+             record: -4, spill: 0 } },
+
+      { name: 'Lily', age: 21, state0: 'stable', stability0: 62,
+        pressure: 4, reachable: false, incarcRisk: 0, recordRisk: 0,
+        attrs: { discountRate: 0.20, normSensitivity: 0.30, stigmaSensitivity: 0.45,
+                 serviceTrust: 0.55, riskExposure: 0.10, socialSupport: 0.50,
+                 incomeDependence: 0.30 },
+        w: { treat: 0, queue: 0, harm: 0, enf: -3, trust: 4, frame: 2,
+             reg: 0, price: -2, varq: -4, norm: 0, mkt: 0, regStep: 0,
+             record: 0, spill: 0.6 }, sibling: 'Marek' }
+    ]
   };
 
   /* ===================================================================
@@ -343,10 +506,13 @@
 
   function clamp(x, lo, hi) { return x < lo ? lo : (x > hi ? hi : x); }
 
+  /* §7.5's meanDiscount is the population mean of the twelve's
+     discountRate attribute — the one place an individual attribute
+     feeds the aggregate model. */
   function meanDiscount(P) {
-    var v = P.twelveDiscountRate, s = 0, n = 0, k;
-    for (k in v) if (Object.prototype.hasOwnProperty.call(v, k)) { s += v[k]; n++; }
-    return n ? s / n : 0;
+    var v = P.twelve, s = 0, i;
+    for (i = 0; i < v.length; i++) s += v[i].attrs.discountRate;
+    return v.length ? s / v.length : 0;
   }
 
   function frameMult(P, F) { return P.treatment.frameMult[String(F)]; }
@@ -394,7 +560,7 @@
       taxBurden: P.tax.base,             // [P2]
 
       forecasts: [],
-      people: [],                        // step 7
+      people: createPeople(P),           // §9, build step 7
 
       /* --- engine bookkeeping, not displayed --------------------- */
       _ref: { U0: i.U0, D0: i.D0, K0: i.K0, margin0: i.margin0 },
@@ -408,7 +574,9 @@
       _riskCost: 0,
       _interdiction: 0,
       _cost: 0,
-      _coherence: { jump: false, reversal: false }
+      _coherence: { jump: false, reversal: false },
+      _blocTerms: null,                  // §7.8 target decomposition, step 8
+      _signals: null                     // §9 population signals, step 7
     };
     var w = P.blocs.weights;
     st.A = w.centre * st.blocs.centre + w.prog * st.blocs.prog +
@@ -571,12 +739,15 @@
     st.deaths = Math.max(0, st.deaths);
 
     /* ============================================================== *
-     * 8. Apply deaths to D (and, from step 7 of the build order, to
-     *    the twelve — not yet present).                               */
+     * 8. Apply deaths to D and to the twelve (§9).                    */
     st.D = Math.max(0, st.D - st.deaths);
     st.U = Math.max(0, st.U - st.deaths);
     st.Dtreat = Math.min(st.Dtreat, st.D);
     st.deathsCum += st.deaths;
+
+    var sig = peopleSignals(st, { E: E, T: T, H: H, G: G, F: F }, P);
+    st._signals = sig;
+    applyDeathsToTwelve(st, sig, P);
 
     /* ============================================================== *
      * 9. Crime, incarceration, records (§7.7)                         */
@@ -691,6 +862,33 @@
     st.A = w.centre * st.blocs.centre + w.prog * st.blocs.prog
          + w.trad * st.blocs.trad + w.health * st.blocs.health;
 
+    /* [step 8] the target decomposition, kept so the coalition strip and
+       §10's election screen can name WHICH term moved a bloc, not merely
+       that it moved. Nothing reads back into the model. */
+    st._blocTerms = {
+      centre: { base: pb.base.centre,
+                crime: -pb.centre.crime * (st.crime - cr.base),
+                deficit: -pb.centre.deficit * Math.max(0, -st.budget / 100),
+                tax: -pb.centre.tax * taxPts },
+      prog:   { base: pb.base.prog,
+                deaths: pb.prog.deaths * (pb.deathsRef - st.deaths)
+                        * (pb.prog.salienceFloor + pb.prog.salienceCoef * st.S),
+                records: -pb.prog.records * (st.records / 1000),
+                g: pb.prog.g * g, enf: -pb.prog.enf * E,
+                frame: pb.prog.frame * F, tax: -pb.prog.tax * taxPts },
+      trad:   { base: pb.base.trad,
+                crime: -pb.trad.crime * (st.crime - cr.base),
+                g: -pb.trad.g * g, harm: -pb.trad.harm * H,
+                frame: -pb.trad.frame * F,
+                prevalence: -pb.trad.prevalence * (st.U / ref.U0 - 1) * 100,
+                tax: -pb.trad.tax * taxPts },
+      health: { base: pb.base.health,
+                deaths: pb.health.deaths * (pb.deathsRef - st.deaths),
+                wait: -pb.health.wait * st.W, treat: pb.health.treat * T,
+                frame: pb.health.frame * F, enf: -pb.health.enf * E,
+                tax: -pb.health.tax * taxPts }
+    };
+
     /* ============================================================== *
      * 11. Trust (§7.9)                                                */
     var tu = P.trust;
@@ -706,7 +904,8 @@
     st.S = st.S * P.salience.decay;
 
     /* ============================================================== *
-     * 12. The twelve (§9) — build-order step 7. Not yet present.      */
+     * 12. The twelve (§9) — build-order step 7.                       */
+    updateTwelve(st, sig, P);
 
     st._prevLevers = { E: E, T: T, H: H, G: G, F: F };
     return st;
@@ -745,8 +944,304 @@
       centre: st.blocs.centre, prog: st.blocs.prog,
       trad: st.blocs.trad, health: st.blocs.health,
       A: st.A, trust: st.trust, budget: st.budget, S: st.S,
-      taxBurden: st.taxBurden, cost: st._cost
+      taxBurden: st.taxBurden, cost: st._cost,
+      people: peopleSnapshot(st),
+      blocTerms: st._blocTerms
     };
+  }
+
+  /* ===================================================================
+   * THE TWELVE (§9) — build-order step 7
+   * -------------------------------------------------------------------
+   * Population policy is set collectively; consequences render
+   * individually. Each person's stability is a partial adjustment
+   * toward a target built from the population state filtered through
+   * their own attributes. Deterministic throughout: no RNG enters here,
+   * so two sections run on the same seed get the same twelve.
+   *
+   * `discountRate` and `normSensitivity` are load-bearing (§9): the
+   * first scales both the treatment-access channel and the queue
+   * channel, the second scales the norm channel. Remove either and
+   * Marek/Errol and Aisha/Callum stop behaving as §9 describes.
+   * =================================================================== */
+
+  function createPeople(P) {
+    P = P || PARAMS;
+    var out = [], i, d, a;
+    for (i = 0; i < P.twelve.length; i++) {
+      d = P.twelve[i];
+      a = d.attrs;
+      out.push({
+        name: d.name, age: d.age,
+        discountRate: a.discountRate,
+        normSensitivity: a.normSensitivity,
+        stigmaSensitivity: a.stigmaSensitivity,
+        serviceTrust: a.serviceTrust,
+        riskExposure: a.riskExposure,
+        socialSupport: a.socialSupport,
+        incomeDependence: a.incomeDependence,
+        stability: d.stability0,
+        state: d.state0,
+        /* --- bookkeeping ------------------------------------------- */
+        _i: i,
+        _target: d.stability0,
+        _prevStability: d.stability0,
+        _hazard: 0,                 // accumulated fatal hazard, terminal at 1
+        _record: 0,                 // 1 once a possession record is issued
+        _recordQ: 0,                // quarters of E above the §9.1 threshold
+        _enfExposure: 0,            // quarters of enforcement exposure
+        _incarcLeft: 0,             // quarters left in a spell
+        _treatedQ: 0,               // consecutive quarters in treatment
+        _pres: 0,                   // personal presentation propensity
+        _terminalQ: 0,              // quarter the trace went flat, 0 if alive
+        _channels: {}
+      });
+    }
+    return out;
+  }
+
+  /* The population signals every person reads, computed once a quarter.
+   * Each is expressed as a deviation from the baseline state, so on the
+   * passive path every channel is ~0 and the target is attributes only. */
+  function peopleSignals(st, lev, P) {
+    var ref = st._ref, g = clamp(lev.G, 0, 4) / 4;
+    return {
+      E: clamp(lev.E, 0, 1), T: clamp(lev.T, 0, 1), H: clamp(lev.H, 0, 1),
+      G: clamp(lev.G, 0, 4), g: g, F: lev.F,
+      enf: clamp(lev.E, 0, 1) * (1 - g),
+      queue: Math.max(0, st.W / P.init.W0 - 1),
+      wait: st.W,
+      trust: st.trust - P.init.trust0,
+      price: st.P / P.price.base - 1,
+      varq: st.PhiVar / (P.potency.varBase * P.init.Phi0) - 1,
+      norm: st.norm - P.init.norm0,
+      mkt: st.Kill / ref.K0 - 1,
+      capacityFree: Math.max(0, st._capacity - st.Dtreat),
+      R: st.R
+    };
+  }
+
+  /* Personal presentation propensity — the per-person form of §7.5's
+   * population rate, with that person's own discountRate against the
+   * queue and their own stigmaSensitivity against the frame. */
+  function presentationOf(p, sig, st, P) {
+    var tr = P.treatment;
+    var frame = Math.pow(frameMult(P, sig.F), p.stigmaSensitivity);
+    return tr.presentationBase
+      * Math.exp(-p.discountRate * sig.wait / tr.waitWeeksPerQuarter)
+      * frame
+      * (1 + tr.regPresentationCoef * sig.g)
+      * (tr.trustFloor + tr.trustCoef * st.trust)
+      * (p.serviceTrust + (1 - p.serviceTrust) * st.trust);
+  }
+
+  /* Step 8 of the evaluation order: apply deaths to the twelve. The
+   * hazard is the individual form of §7.6 — variance drives fatality,
+   * harm reduction is the fastest lever on it — scaled by riskExposure
+   * and by how precarious the person currently is. */
+  function applyDeathsToTwelve(st, sig, P) {
+    var pp = P.people, i, p, mult, haz;
+    for (i = 0; i < st.people.length; i++) {
+      p = st.people[i];
+      if (p.state === 'deceased') continue;
+      mult = p.state === 'in-treatment' ? pp.hazardTreat
+           : p.stability < pp.bandPrecarious ? pp.hazardCrisis
+           : p.stability < pp.bandStable ? pp.hazardPrecarious
+           : pp.hazardStable;
+      haz = pp.hazardBase * p.riskExposure * (1 - pp.hazardHarmCoef * sig.H)
+          * (st.PhiVar / (P.potency.varBase * P.init.Phi0)) * mult;
+      p._hazard += haz;
+      if (p._hazard >= pp.hazardFatal) {
+        p.state = 'deceased';        // terminal and irreversible (§9)
+        p.stability = 0;
+        p._terminalQ = st.q;
+      }
+    }
+  }
+
+  /* Step 12 of the evaluation order: the twelve. */
+  function updateTwelve(st, sig, P) {
+    var pp = P.people, md = meanDiscount(P), i, k, p, d, w, c, target, sib;
+    var byName = {};
+    for (i = 0; i < st.people.length; i++) byName[st.people[i].name] = st.people[i];
+
+    for (i = 0; i < st.people.length; i++) {
+      p = st.people[i];
+      d = P.twelve[i];
+      w = d.w;
+      if (p.state === 'deceased') { p._prevStability = p.stability; continue; }
+
+      /* --- §9.1 the record. Cumulative and irreversible, like §7.7's
+         aggregate: any E above the threshold, sustained, issues one. */
+      if (sig.E > pp.recordThresholdE && d.recordRisk > 0) {
+        p._recordQ += 1;
+        if (p._recordQ >= pp.recordQuarters) p._record = 1;
+      }
+
+      /* --- enforcement exposure and spells ------------------------- */
+      if (p._incarcLeft > 0) p._incarcLeft -= 1;
+      else if (d.incarcRisk > 0) {
+        p._enfExposure += sig.enf * d.incarcRisk;
+        if (p._enfExposure >= pp.incarcThresholdQ) {
+          p._incarcLeft = pp.incarcQuarters;
+          p._enfExposure = 0;
+        }
+      }
+
+      /* --- channels ------------------------------------------------ */
+      sib = d.sibling ? byName[d.sibling] : null;
+      c = {
+        treat:  w.treat * sig.T * Math.exp(-p.discountRate * sig.wait / P.treatment.waitWeeksPerQuarter),
+        queue:  w.queue * sig.queue * (md > 0 ? p.discountRate / md : 0),
+        harm:   w.harm * sig.H,
+        enf:    w.enf * sig.enf,
+        trust:  w.trust * sig.trust * (1 - p.serviceTrust),
+        frame:  w.frame * sig.F * p.stigmaSensitivity,
+        reg:    w.reg * sig.g,
+        price:  w.price * sig.price * p.incomeDependence,
+        varq:   w.varq * sig.varq * p.riskExposure,
+        norm:   w.norm * sig.norm * p.normSensitivity,
+        mkt:    w.mkt * sig.mkt,
+        regStep: w.regStep * (d.regStepTier != null && sig.G >= d.regStepTier ? 1 : 0),
+        record: w.record * p._record,
+        spill:  sib ? w.spill * (sib._prevStability - pp.spillRef) : 0
+      };
+      p._channels = c;
+
+      target = pp.base + pp.supportCoef * p.socialSupport - d.pressure;
+      for (k in c) if (Object.prototype.hasOwnProperty.call(c, k)) target += c[k];
+      if (p._incarcLeft > 0) target = pp.incarcFloor;
+      target = clamp(target, pp.min, pp.max);
+      p._target = target;
+
+      p._prevStability = p.stability;
+      p.stability = clamp(p.stability + pp.adjust * (target - p.stability), pp.min, pp.max);
+
+      /* --- presentation and the treated stock ---------------------- */
+      p._pres = d.reachable ? presentationOf(p, sig, st, P) : 0;
+
+      /* --- state (§9) ---------------------------------------------- */
+      if (p._incarcLeft > 0) { p.state = 'incarcerated'; p._treatedQ = 0; continue; }
+
+      if (p.state === 'in-treatment') {
+        if (p._pres < pp.presLeaveThreshold) { p._treatedQ = 0; }
+        else p._treatedQ += 1;
+      } else if (d.reachable && p._pres >= pp.presThreshold && sig.capacityFree > 0
+                 && p.stability < pp.treatEntryBand) {
+        p._treatedQ = 1;
+      } else {
+        p._treatedQ = 0;
+      }
+
+      if (p._treatedQ >= pp.recoverQuarters && sig.R >= pp.recoverRetention
+          && p.stability >= pp.bandStable) {
+        p.state = 'recovered';
+        p._treatedQ = 0;
+      } else if (p._treatedQ > 0) {
+        p.state = 'in-treatment';
+      } else if (p.state === 'recovered') {
+        /* `recovered` can revert to `precarious` (§9), and only that. */
+        p.state = p.stability < pp.relapseBand ? 'precarious' : 'recovered';
+      } else {
+        p.state = p.stability >= pp.bandStable ? 'stable'
+                : p.stability >= pp.bandPrecarious ? 'precarious' : 'crisis';
+      }
+    }
+  }
+
+  function peopleSnapshot(st) {
+    var out = [], i, p;
+    for (i = 0; i < st.people.length; i++) {
+      p = st.people[i];
+      out.push({ name: p.name, stability: p.stability, state: p.state,
+                 target: p._target, hazard: p._hazard, record: p._record,
+                 pres: p._pres });
+    }
+    return out;
+  }
+
+  /* ===================================================================
+   * CONSTITUENCIES (§7.8) — build-order step 8, headless part
+   * -------------------------------------------------------------------
+   * The bloc equations themselves live in stepQuarter, in the fixed
+   * evaluation order. What step 8 adds here is what the coalition strip
+   * and §10's election screen read: the four readings with the weighted
+   * A beside them, and an attribution of a collapse to a bloc, a
+   * quarter and a term. No rendering — the strip is a data shape.
+   * =================================================================== */
+
+  var LENS = {
+    /* §4.3 — which adviser owns which reading. Not a colour, not a
+       number: a mapping the disciplinary lens dims against. */
+    ECO: ['P', 'margin', 'Kill', 'Kleg', 'M', 'Phi', 'crime', 'budget', 'taxBurden', 'cost'],
+    PSY: ['norm', 'W', 'R', 'Dtreat', 'trust', 'U', 'D', 'people'],
+    POL: ['centre', 'prog', 'trad', 'health', 'A', 'S', 'incarcerated', 'records']
+  };
+
+  function coalitionStrip(st, P) {
+    P = P || PARAMS;
+    var w = P.blocs.weights, b = st.blocs;
+    var names = ['centre', 'prog', 'trad', 'health'], i, weakest = names[0];
+    for (i = 1; i < names.length; i++) if (b[names[i]] < b[weakest]) weakest = names[i];
+    return {
+      blocs: { centre: b.centre, prog: b.prog, trad: b.trad, health: b.health },
+      weights: { centre: w.centre, prog: w.prog, trad: w.trad, health: w.health },
+      A: st.A,
+      weakest: weakest,
+      weakestValue: b[weakest],
+      terms: st._blocTerms
+    };
+  }
+
+  /* §10: "You did not lose the country. You lost the Centre, in Q12,
+     over crime." Returns the bloc that fell furthest from its own peak,
+     the quarter of its steepest single-quarter fall, and the target term
+     that moved most against it over that fall. */
+  function collapseAttribution(history) {
+    var names = ['centre', 'prog', 'trad', 'health'], i, q, h, nm;
+    var best = null;
+    for (i = 0; i < names.length; i++) {
+      nm = names[i];
+      var peak = -Infinity, peakQ = 0, fall = 0, fallQ = 0, worstStep = 0, stepQ = 0;
+      for (q = 1; q < history.length; q++) {
+        h = history[q];
+        if (h[nm] > peak) { peak = h[nm]; peakQ = h.q; }
+        if (peak - h[nm] > fall) { fall = peak - h[nm]; fallQ = h.q; }
+        if (q > 1 && history[q - 1][nm] - h[nm] > worstStep) {
+          worstStep = history[q - 1][nm] - h[nm]; stepQ = h.q;
+        }
+      }
+      if (!best || fall > best.fall) {
+        best = { bloc: nm, peak: peak, peakQ: peakQ, fall: fall, fallQ: fallQ,
+                 steepestQ: stepQ, steepest: worstStep };
+      }
+    }
+    /* §10 wants a term named, not merely a bloc: the caption is "you
+       lost the Centre, in Q12, over crime". `over` is the term standing
+       furthest against the bloc at the bottom of its worst drawdown —
+       the level. `worsened` is the term that moved most against it on
+       the way down — the flow. A step change in a lever shows in the
+       first and not the second, so both are reported. */
+    var at = best ? history[best.fallQ] : null;
+    if (at && at.blocTerms) {
+      var z = at.blocTerms[best.bloc], k, term = null, worst = 0;
+      for (k in z) if (Object.prototype.hasOwnProperty.call(z, k)) {
+        if (k !== 'base' && z[k] < worst) { worst = z[k]; term = k; }
+      }
+      best.over = term;
+      best.overPoints = worst;
+
+      var from = history[Math.max(1, best.peakQ)];
+      if (from && from.blocTerms) {
+        var a = from.blocTerms[best.bloc], drop = 0, moved = null;
+        for (k in z) if (Object.prototype.hasOwnProperty.call(z, k)) {
+          if (k !== 'base' && (a[k] || 0) - z[k] > drop) { drop = (a[k] || 0) - z[k]; moved = k; }
+        }
+        best.worsened = moved;
+        best.worsenedPoints = drop;
+      }
+    }
+    return best;
   }
 
   var WARD = {
@@ -758,6 +1253,14 @@
     stepQuarter: stepQuarter,
     run: run,
     snapshot: snapshot,
+    createPeople: createPeople,
+    peopleSignals: peopleSignals,
+    presentationOf: presentationOf,
+    updateTwelve: updateTwelve,
+    peopleSnapshot: peopleSnapshot,
+    LENS: LENS,
+    coalitionStrip: coalitionStrip,
+    collapseAttribution: collapseAttribution,
     clamp: clamp,
     meanDiscount: meanDiscount
   };
