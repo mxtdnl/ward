@@ -1,0 +1,969 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WARD — Region of Alder</title>
+<style>
+  /* Tokens (§2.3). No UI is built yet — build order steps 4, 5, 9 are not
+     implemented. These are declared so that no colour outside the token
+     table can enter the file later. */
+  :root{
+    --ground:#12161A;
+    --ground-deep:#0C0F12;
+    --ground-raised:#191E24;
+    --rule:#2A3138;
+    --bone:#EDEFF1;
+    --bone-dim:#9BA5AE;
+    --amber:#E0A22C;
+    --cyan:#4FB8C4;
+    --red:#C8402F;
+    --green-faint:#5A7D63;
+  }
+  html,body{background:var(--ground);color:var(--bone);margin:0}
+  body{font-family:"Inter","Helvetica Neue",system-ui;font-size:13px;padding:24px}
+  p{color:var(--bone-dim);max-width:70ch}
+</style>
+</head>
+<body>
+<p>WARD — headless build. Model engine, the twelve and the four constituency
+blocs are implemented; no instrument surface is drawn yet. Open the console and
+call <code>WARD.selfTest()</code>.</p>
+<script>
+"use strict";
+/* ==========================================================================
+   WARD — Region of Alder
+   Headless model. Build order §13 items 1–3 (engine), 7 (the twelve) and
+   8 (constituencies) only. No rendering.
+
+   EVERY model number lives in PARAMS. Where a value differs from the figure
+   printed in the handoff spec, the comment says so and why; §0 of the spec
+   makes PARAMS the authority and requires retuning to happen here.
+   ========================================================================== */
+
+const PARAMS = {
+
+  sim: {
+    quarters: 40,             // ten-year horizon (§4.1)
+    defaultSeed: 20260819,    // seeded RNG default (§11)
+    weeksPerQuarter: 13,      // used by the discounting term in §7.5
+    roundQuarters: [2,2,3,3,3,3,4,4,4,4,4,4],  // §4.1: 12 cabinet rounds, 40 quarters
+  },
+
+  /* ---- initial state (§6) ------------------------------------------- */
+  init: {
+    population: 4200000,      // Region of Alder, fictional
+    P: 100,                   // street price index base
+    Phi: 1.00,                // potency multiplier base
+    margin: 1.00,             // illicit unit margin base
+    Kill: 1.00,               // illicit capacity index base (K0)
+    Kleg: 0.00,               // no legal capacity under prohibition
+    norm: 1.00,               // social normalisation base
+    U: 84200,                 // prevalence at Q0
+    D: 9140,                  // dependent users at Q0
+    Dtreat: 220,              // in treatment at Q0 (fits capacity at T=0)
+    trust: 0.50,              // institutional trust 0–1
+    S: 0.20,                  // media salience at Q0
+    budget: 0,                // fiscal position, accrues 220/quarter
+    blocs: { centre: 50, prog: 50, trad: 50, health: 50 },
+  },
+
+  /* ---- levers (§5) ---------------------------------------------------- */
+  levers: {
+    detents: [0, 0.25, 0.50, 0.75, 1.00],   // E, T, H
+    supplyTiers: [0, 1, 2, 3, 4],           // G
+    frames: [-1, 0, 1],                     // F
+    costE: 40,                              // quarterly cost per unit E
+    costT: 55,                              // quarterly cost per unit T
+    costH: 15,                              // quarterly cost per unit H
+    revenueG: 30,                           // net revenue per unit g, scaled by U/U0
+    setupG: 120,                            // one-off cost at each tier increase
+    incarcerationCostPerPerson: 0.02,       // quarterly custody cost per person held
+    budgetPerQuarter: 60,                   /* accrual. §4.1 prints 220, but the
+                                               three funded levers cost at most
+                                               40 + 55 + 15 = 110 a quarter, so
+                                               at 220 no configuration can ever
+                                               run a deficit and the Centre's
+                                               fiscal concern never fires. At 60
+                                               a serious programme has to be
+                                               paid for. */
+    deficitFloor: -400,                     // beyond this, compounding coalition penalty
+    deficitPenaltyRate: 0.015,              // compounding penalty per quarter past floor
+    coherenceTrustPenalty: 0.06,            // ΔG > 1 tier in one round (§5)
+    coherenceBlocPenalty: 3.0,              // applied to every bloc on the same event
+    reversalTrustPenalty: 0.12,             // reversing a G change within 8 quarters
+    reversalBlocPenalty: 6.0,
+    reversalWindow: 8,                      // quarters
+  },
+
+  /* ---- 7.1 price and margin ------------------------------------------ */
+  price: {
+    base: 100,
+    enforcementLift: 0.55,      // (1 + 0.55·E)
+    regulationCut: 0.30,        // (1 − 0.30·g)
+    K0: 1.00,                   // reference total capacity
+    capacityFloor: 0.20,        // max(Kill + Kleg, 0.2)
+    scarcityExponent: 0.35,
+    adjust: 0.25,               // partial adjustment toward P*
+    riskCostCoef: 0.45,         // riskCost = 0.45·E·(1 − g)
+    margin0: 1.00,
+  },
+
+  /* ---- 7.2 capacity and illicit share -------------------------------- */
+  capacity: {
+    entryExponent: 1.10,        // Kill* = K0·(margin/margin0)^1.10
+    entryAdjust: 0.22,          // illicit entry lag ≈ 4–6 quarters
+    interdictionCoef: 0.34,     // only *changes* in E seize capacity
+    killFloor: 0.05,
+    legTarget: 1.15,            // Kleg* = 1.15·gLegal^0.85
+    legExponent: 0.85,
+    legalSupplyTier: 1,         /* no legal supply exists below this tier. §5
+                                   makes tier 1 possession decriminalisation,
+                                   which supplies nothing: gLegal is measured
+                                   from tier 1 up, not from tier 0. The bare
+                                   g^0.85 gives a decriminalised regime a legal
+                                   market it does not have. */
+    legAdjust: 0.14,            // procurement is slower than illicit entry
+    shareFloor: 0.05,
+  },
+
+  /* ---- 7.3 potency and variance -------------------------------------- */
+  potency: {
+    enforcementLift: 0.90,      // Phi* = 1 + 0.90·E·(1 − g) − 0.50·g
+    regulationCut: 0.50,
+    adjustUp: 0.20,             // ratchet: up fast
+    adjustDown: 0.08,           // down slow
+    varianceCoef: 0.25,         // PhiVar = 0.25·Phi·(1 − 0.70g)·(1 − 0.40H)
+    varianceRegCut: 0.70,
+    varianceHarmCut: 0.40,
+    varianceRef: 0.25,          // PhiVar at baseline, used as the death scalar ref
+  },
+
+  /* ---- 7.4a norms ----------------------------------------------------- */
+  norms: {
+    regulationLift: 0.40,       /* [PSY] legality changes perceived acceptability.
+                                   Retuned up from the spec's 0.26 — §9.1
+                                   directs that the norm coefficients are the
+                                   first thing to move if Test 7b fails, and at
+                                   0.26 a regulated regime raised norms less
+                                   than enforcement suppressed them, so a
+                                   liberal-plus-punitive mix reached nobody. */
+    contagion: 0.30,            // [PSY] use begets use
+    moralisedSuppression: 0.12, /* [PSY] the spec writes "− 0.12·F" but its own
+                                   comment says moralised framing suppresses and
+                                   medicalised does not promote. Implemented to
+                                   the comment: 0.12·min(F,0), i.e. −0.12 at
+                                   F = −1, zero at F = 0 and F = +1. The literal
+                                   reading inverts the stated mechanism. */
+    enforcementDeterrent: 0.10, // [PSY] visible enforcement carries a signal
+    adjust: 0.10,               // slowest variable in the model
+  },
+
+  /* ---- 7.4b prevalence ------------------------------------------------ */
+  prevalence: {
+    initiationRate: 0.020,      // of U0 per quarter
+    epsilonInit: -0.35,         // price elasticity of initiation — elastic
+    normExponent: 0.85,
+    arrestDeterrence: 0.22,     // (1 − 0.22·E·(1 − g))
+    cessationRate: 0.019,
+  },
+
+  /* ---- 7.4c dependence ------------------------------------------------ */
+  dependence: {
+    epsilonQty: -0.12,          // near-inelastic consumption among dependents
+    inflowRate: 0.0028,         /* retuned from the spec's illustrative 0.014
+                                   and applied to the non-dependent pool (U − D)
+                                   rather than U. At 0.014·U the dependent
+                                   population quadruples by Q40 and Test 1's
+                                   "deaths rise slowly" floor is unreachable. */
+    inflowNormExponent: 0.4,
+    treatedOutflow: 0.12,       // Dtreat·R·0.12
+    spontaneousOutflow: 0.008,  // D·0.008
+  },
+
+  /* ---- 7.5 treatment -------------------------------------------------- */
+  treatment: {
+    capacityBase: 20,           // capacity = 20 + 180·T …
+    capacityPerT: 180,
+    capacityUnit: 12,           /* … × 12 persons per capacity point. The spec
+                                   leaves capacity dimensionless; this is the
+                                   scalar that makes W land near 20 weeks at
+                                   T = 0, as the §3 layout shows. */
+    queueQuarters: 4,           // T enters via a 4-quarter queue
+    presentationBase: 0.06,
+    frameMult: { "-1": 0.60, "0": 1.00, "1": 1.45 },
+    moralisedStigmaBlock: 0.85, /* additional suppression under a moralised
+                                   frame, scaled by the population mean of the
+                                   twelve's stigmaSensitivity — the same device
+                                   §7.5 uses for meanDiscount. Without it a
+                                   punitive-messaging, well-funded service still
+                                   fills its places and Test 3 cannot hold. */
+    regulationEase: 0.25,       // (1 + 0.25·g) — arrest fear removed
+    trustFloor: 0.6,            // (0.6 + 0.4·trust)
+    trustGain: 0.4,
+    waitScale: 40,              // W* = 40·seeking/capacity
+    waitAdjust: 0.30,           /* partial adjustment of W toward W*. The bare
+                                   spec expression is a one-step map with a
+                                   steep exponential in it and oscillates
+                                   between 2 and 100 weeks; every other partial
+                                   adjustment in §7 is damped and this one has
+                                   to be too. */
+    retentionBase: 0.35,
+    retentionPerT: 0.30,
+    retentionMedicalised: 0.10,
+    retentionMoralised: 0.15,
+    retentionMin: 0.10,
+    retentionMax: 0.85,
+    dropoutRate: 0.10,          // quarterly dropout among the non-retained
+  },
+
+  /* ---- 7.6 deaths ------------------------------------------------------ */
+  deaths: {
+    baseRate: 0.012,            // of untreated dependent users
+    harmReductionCut: 0.55,     // fastest, strongest lever on fatality
+    treatedCoverageCut: 0.20,
+  },
+
+  /* ---- 7.7 crime, incarceration, records ------------------------------- */
+  crime: {
+    base: 100,
+    priceExponent: 0.9,
+    regulationCut: 0.45,
+    incarcerationCoef: 0.8 * 0.004,   // 0.8·E·U·(1 − g)·0.004
+    releaseRate: 0.15,                // quarterly release fraction of stock
+    recordsCoef: 0.9 * 0.006,         // cumulative and irreversible
+  },
+
+  /* ---- 7.8 constituencies ---------------------------------------------- */
+  blocs: {
+    weights: { centre: 0.38, prog: 0.24, trad: 0.22, health: 0.16 },
+    centre:  { crime: 0.070, deficit: 0.045, event: 0.9 },
+    prog:    { deaths: 0.050, salienceFloor: 0.4, salienceGain: 0.6,
+               incarceration: 0.030, records: 0.025, dG: 0.060, dE: 0.070,
+               personScale: 100 },  /* incarceration and records are counted in
+                                       people, not index points: without a scale
+                                       the two terms are ~10 bloc points a
+                                       quarter and Progressive floors at 0 in
+                                       four quarters under any enforcement. */
+    trad:    { crime: 0.050, dG: 0.130, dH: 0.060, moralised: 0.070,
+               medicalised: 0.070, prevalence: 0.040 },
+    health:  { deaths: 0.060, dW: 0.045, dT: 0.055, medicalised: 0.050,
+               punitive: 0.060 },
+    min: 0, max: 100,
+    deficitScale: 100,          // deficit is read in hundreds by §7.8
+    prevalenceScale: 100,       // (U/U0 − 1) is read in percentage points
+    baseline: 48,               /* support a bloc returns to when it is getting
+                                   nothing it wants — just below the satisfied
+                                   threshold. A bloc has to be actively earning
+                                   support to sit above 50; incumbency decays. */
+    reversion: 0.10,            /* per-quarter pull back to baseline. §7.8 gives
+                                   deltas only, so a small standing improvement
+                                   would accumulate without bound and every bloc
+                                   would saturate at 100. */
+    fallThreshold: 35,          // A < 35 at an election → administration falls
+    satisfiedThreshold: 50,     // Test 7c: "above 50"
+    salienceDecay: 0.75,        // S decays 0.75 per quarter
+  },
+
+  /* ---- 7.9 trust -------------------------------------------------------- */
+  trust: {
+    consistencyGain: 0.02,      // ·(consistencyQuarters/8)
+    consistencyWindow: 8,
+    consistencyCeiling: 0.70,   /* consistency alone restores trust only this
+                                   far. Without a ceiling, a government that
+                                   does nothing for ten years reaches perfect
+                                   institutional trust and every person who
+                                   distrusts services is quietly rescued by
+                                   inaction. */
+    reversalPenalty: 0.06,
+    enforcementPenalty: 0.04,   // ·E·(1 − g)
+    min: 0, max: 1,
+  },
+
+  /* ======================================================================
+     §9 THE TWELVE
+     Shared channel weights, then the roster. Every person is scored through
+     the same channels; only their attributes differ.
+     ====================================================================== */
+  person: {
+    stabilityBase: 62,          // neutral target before any channel applies
+    supportMid: 0.5,            // midpoint of the 0–1 attribute scale
+    stabilityMin: 0,
+    stabilityMax: 100,
+    adjust: 0.28,               // partial adjustment of stability to target
+
+    wSupport: 18,               // social support, centred on 0.5
+    wInTreatment: 18,           /* being in treatment, scaled by retention R and
+                                   by the person's treatmentBenefit: a place in
+                                   a drug treatment programme does not treat
+                                   Tomas's pain or Gareth's substances. */
+    wHarmReduction: 26,         // H · riskExposure
+    wVariance: 34,              // (PhiVar/varRef − 1) · varSensitivity
+    wVarianceRelief: 0.25,      /* variance below the reference is credited at
+                                   this fraction of the penalty rate. Removing a
+                                   hazard makes a person safer; it does not make
+                                   them better than well. */
+    wPrice: 26,                 // price stress · incomeDependence
+    wEscalation: 5,             /* weight on accumulated escalation. §9.1 needs
+                                   liberalisation to *reach* Aisha and Callum,
+                                   and a level shift in norm cannot do that: a
+                                   permissive norm compounds into a person's use
+                                   over years. Escalation accrues while norm is
+                                   above 1 and unwinds while it is below. */
+    escalationRate: 1.0,        // per-quarter accrual of normSensitivity·(norm − 1)
+    escalationMax: 6.0,         // bound, so a decade of liberalisation is finite
+    wDeterrence: 40,            // E·(1−g) · deterrenceBenefit — prohibition works here
+    wEnforcementHarm: 24,       // E·(1−g) · enforcementHarm
+    wRecord: 22,                // a criminal record, permanent
+    wStigmaMoralised: 26,       // moralised frame · stigmaSensitivity
+    wFrameMedicalised: 12,      // medicalised frame · stigmaSensitivity
+    wTrust: 34,                 // (trust − ref) · (1 − serviceTrust)
+    wLegalSupply: 44,           // legal share of supply · legalSupplyBenefit
+    wSupplyIncome: 40,          // (M − ref) · supplyIncome
+    wSupplyCollapse: 55,        // supplyIncome, once G ≥ supplyCollapseTier
+    wWait: 10,                  // (W/weeksPerQuarter) · discountRate, users only
+    wCapacityCrowding: 8,      // (W/weeksPerQuarter) for out-of-scope substances
+    wTreatmentFunding: 20,      // T, for out-of-scope substances
+    carerWeight: 0.6,           // Lily tracks her sibling at 0.6, one quarter late
+    wTrajectory: 1.0,           /* scales each person's `trajectory`: where their
+                                   life is heading absent any policy. Callum is
+                                   in his first year of use and Errol is rough
+                                   sleeping; without this every person's
+                                   untouched path is the same flat line. */
+
+    varRef: 0.25,               // PhiVar reference for the variance channel
+    trustRef: 0.50,
+    marketShareRef: 1.00,       // M under prohibition
+    supplyCollapseTier: 3,      // "Dean … collapses at G ≥ 3"
+    recordExposureFloor: 0.40,  /* §9.1: "any E > 0.4 sustained for eight
+                                   quarters gives Priya a record". Exposure
+                                   accrues only on enforcement above this
+                                   floor, so a light-touch regime never
+                                   produces one however long it runs. */
+    recordThreshold: 0.80,      // ⇒ exactly 8 quarters at E = 0.5, g = 0
+    presentationBase: 0.22,     // per-quarter presentation probability scalar
+    dropoutBase: 0.10,
+    recoveredStability: 78,     // stability at which in-treatment → recovered
+    recoveredMinQuarters: 4,
+    relapseStability: 52,       // recovered → precarious below this
+    stableThreshold: 68,
+    crisisThreshold: 42,
+    deathHazardBase: 0.0035,    // per quarter, before modifiers
+    deathHazardCrisis: 2.6,     // multiplier while in crisis
+    deathHazardTreated: 0.35,   // multiplier while in treatment
+    arrestHazardBase: 0.010,    // per quarter, · E·(1−g)·arrestExposure
+    releaseAfterQuarters: 3,
+
+    /* Attributes are 0–1 unless noted. serviceReach is how visible a person is
+       to treatment capacity at all; deterrenceBenefit is how much prohibition
+       protects them; varSensitivity, legalSupplyBenefit, supplyIncome,
+       arrestExposure, recordSensitivity and outOfScope are the channel keys
+       named in §9's design-function column. */
+    roster: [
+      { name:"Marek", treatmentBenefit:1.00, trajectory:-6,  age:34, user:true,  dependent:true,
+        discountRate:0.88, normSensitivity:0.30, stigmaSensitivity:0.40,
+        serviceTrust:0.65, riskExposure:0.70, socialSupport:0.45,
+        incomeDependence:0.60, serviceReach:0.90, deterrenceBenefit:0.00,
+        varSensitivity:0.55, legalSupplyBenefit:0.25, supplyIncome:0.00,
+        arrestExposure:0.35, recordSensitivity:0.20, enforcementHarm:0.35,
+        outOfScope:0.00, carerOf:null, startStability:54 },
+
+      { name:"Aisha", treatmentBenefit:1.00, trajectory:0,  age:19, user:true,  dependent:false,
+        discountRate:0.55, normSensitivity:0.95, stigmaSensitivity:0.30,
+        serviceTrust:0.55, riskExposure:0.20, socialSupport:0.70,
+        incomeDependence:0.20, serviceReach:0.45, deterrenceBenefit:0.35,
+        varSensitivity:0.30, legalSupplyBenefit:0.05, supplyIncome:0.00,
+        arrestExposure:0.40, recordSensitivity:0.45, enforcementHarm:0.25,
+        outOfScope:0.00, carerOf:null, startStability:78 },
+
+      { name:"Dean", treatmentBenefit:1.00, trajectory:0,   age:27, user:false, dependent:false,
+        discountRate:0.50, normSensitivity:0.20, stigmaSensitivity:0.25,
+        serviceTrust:0.20, riskExposure:0.40, socialSupport:0.35,
+        incomeDependence:0.30, serviceReach:0.10, deterrenceBenefit:0.00,
+        varSensitivity:0.10, legalSupplyBenefit:0.00, supplyIncome:1.00,
+        arrestExposure:0.95, recordSensitivity:0.50, enforcementHarm:0.70,
+        outOfScope:0.00, carerOf:null, startStability:64 },
+
+      { name:"Ruth", treatmentBenefit:1.00, trajectory:-4,   age:52, user:true,  dependent:true,
+        discountRate:0.35, normSensitivity:0.20, stigmaSensitivity:0.95,
+        serviceTrust:0.40, riskExposure:0.45, socialSupport:0.55,
+        incomeDependence:0.25, serviceReach:0.80, deterrenceBenefit:0.00,
+        varSensitivity:0.40, legalSupplyBenefit:0.45, supplyIncome:0.00,
+        arrestExposure:0.20, recordSensitivity:0.60, enforcementHarm:0.20,
+        outOfScope:0.00, carerOf:null, startStability:58 },
+
+      { name:"Callum", treatmentBenefit:1.00, trajectory:-22, age:16, user:true,  dependent:false,
+        discountRate:0.75, normSensitivity:1.00, stigmaSensitivity:0.35,
+        serviceTrust:0.45, riskExposure:0.20, socialSupport:0.60,
+        incomeDependence:0.15, serviceReach:0.35, deterrenceBenefit:1.00,
+        varSensitivity:0.35, legalSupplyBenefit:0.00, supplyIncome:0.00,
+        arrestExposure:0.15, recordSensitivity:0.20, enforcementHarm:0.15,
+        outOfScope:0.00, carerOf:null, startStability:74 },
+
+      { name:"Nadia", treatmentBenefit:1.00, trajectory:0,  age:41, user:false, dependent:true,
+        discountRate:0.40, normSensitivity:0.35, stigmaSensitivity:0.55,
+        serviceTrust:0.70, riskExposure:0.40, socialSupport:0.65,
+        incomeDependence:0.35, serviceReach:0.85, deterrenceBenefit:0.00,
+        varSensitivity:0.35, legalSupplyBenefit:0.20, supplyIncome:0.00,
+        arrestExposure:0.20, recordSensitivity:0.35, enforcementHarm:0.30,
+        outOfScope:0.00, carerOf:null, startStability:70, startState:"recovered" },
+
+      { name:"Errol", treatmentBenefit:0.70, trajectory:-10,  age:38, user:true,  dependent:true,
+        discountRate:1.00, normSensitivity:0.25, stigmaSensitivity:0.50,
+        serviceTrust:0.10, riskExposure:0.95, socialSupport:0.05,
+        incomeDependence:0.70, serviceReach:0.06, deterrenceBenefit:0.00,
+        varSensitivity:0.70, legalSupplyBenefit:0.20, supplyIncome:0.00,
+        arrestExposure:0.55, recordSensitivity:0.15, enforcementHarm:0.85,
+        outOfScope:0.00, carerOf:null, startStability:38 },
+
+      { name:"Priya", treatmentBenefit:1.00, trajectory:0,  age:23, user:true,  dependent:false,
+        discountRate:0.45, normSensitivity:0.40, stigmaSensitivity:0.45,
+        serviceTrust:0.60, riskExposure:0.15, socialSupport:0.75,
+        incomeDependence:0.10, serviceReach:0.30, deterrenceBenefit:0.10,
+        varSensitivity:0.15, legalSupplyBenefit:0.05, supplyIncome:0.00,
+        arrestExposure:1.00, recordSensitivity:1.00, enforcementHarm:0.10,
+        outOfScope:0.00, carerOf:null, startStability:86 },
+
+      { name:"Tomas", treatmentBenefit:0.35, trajectory:-30, age:45, user:true,  dependent:true,
+        discountRate:0.50, normSensitivity:0.15, stigmaSensitivity:0.60,
+        serviceTrust:0.50, riskExposure:0.25, socialSupport:0.40,
+        incomeDependence:0.55, serviceReach:0.60, deterrenceBenefit:0.00,
+        varSensitivity:1.00, legalSupplyBenefit:1.00, supplyIncome:0.00,
+        arrestExposure:0.25, recordSensitivity:0.30, enforcementHarm:0.30,
+        outOfScope:0.00, carerOf:null, startStability:56 },
+
+      { name:"Shauna", treatmentBenefit:0.80, trajectory:-8, age:30, user:true,  dependent:true,
+        discountRate:0.70, normSensitivity:0.30, stigmaSensitivity:0.70,
+        serviceTrust:0.05, riskExposure:0.80, socialSupport:0.20,
+        incomeDependence:0.65, serviceReach:0.25, deterrenceBenefit:0.00,
+        varSensitivity:0.60, legalSupplyBenefit:0.25, supplyIncome:0.00,
+        arrestExposure:0.75, recordSensitivity:0.55, enforcementHarm:0.75,
+        outOfScope:0.00, carerOf:null, startStability:44 },
+
+      { name:"Gareth", treatmentBenefit:0.60, trajectory:-6, age:61, user:false, dependent:true,
+        discountRate:0.45, normSensitivity:0.20, stigmaSensitivity:0.50,
+        serviceTrust:0.75, riskExposure:0.50, socialSupport:0.40,
+        incomeDependence:0.30, serviceReach:0.70, deterrenceBenefit:0.00,
+        varSensitivity:0.00, legalSupplyBenefit:0.00, supplyIncome:0.00,
+        arrestExposure:0.05, recordSensitivity:0.10, enforcementHarm:0.05,
+        outOfScope:1.00, carerOf:null, startStability:60 },
+
+      { name:"Lily", treatmentBenefit:1.00, trajectory:0,   age:21, user:false, dependent:false,
+        discountRate:0.40, normSensitivity:0.20, stigmaSensitivity:0.35,
+        serviceTrust:0.60, riskExposure:0.05, socialSupport:0.55,
+        incomeDependence:0.15, serviceReach:0.50, deterrenceBenefit:0.00,
+        varSensitivity:0.00, legalSupplyBenefit:0.00, supplyIncome:0.00,
+        arrestExposure:0.05, recordSensitivity:0.20, enforcementHarm:0.05,
+        outOfScope:0.00, carerOf:0, startStability:80 },
+    ],
+  },
+
+  /* ---- acceptance-test thresholds (§14) --------------------------------- */
+  outcome: {
+    goodFinalStability: 60,     // stability at Q40
+    goodMeanStability: 55,      // mean over the final window
+    goodWindowQuarters: 8,
+    badStates: ["deceased", "incarcerated", "crisis"],
+  },
+};
+
+/* ==========================================================================
+   Utilities
+   ========================================================================== */
+
+/* mulberry32 (§11). The constants below are the published algorithm, not model
+   coefficients, and are deliberately not in PARAMS. */
+function mulberry32(a){
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+const mean  = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
+
+/* ==========================================================================
+   State
+   ========================================================================== */
+
+function createState(seed){
+  const I = PARAMS.init;
+  const people = PARAMS.person.roster.map((a, i) => ({
+    idx: i, attr: a, name: a.name,
+    stability: a.startStability,
+    state: a.startState || "stable",
+    quartersInTreatment: 0,
+    escalation: 0,
+    quartersIncarcerated: 0,
+    recordExposure: 0,
+    record: false,
+    history: [],
+  }));
+  return {
+    seed, rng: mulberry32(seed), q: 0,
+    P: I.P, Phi: I.Phi, PhiVar: PARAMS.potency.varianceCoef * I.Phi,
+    margin: I.margin, Kill: I.Kill, Kleg: I.Kleg, M: 1,
+    norm: I.norm, U: I.U, U0: I.U, D: I.D, D0: I.D,
+    Dtreat: I.Dtreat, Duntreated0: I.D - I.Dtreat,
+    W: 0, R: PARAMS.treatment.retentionBase,
+    deaths: 0, deathsPrev: 0, deathsCum: 0,
+    crime: PARAMS.crime.base, incarcerated: 0, records: 0,
+    blocs: Object.assign({}, I.blocs), A: 50,
+    S: I.S, trust: I.trust, budget: I.budget,
+    levers: { E: 0, T: 0, H: 0, G: 0, F: 0 },
+    prevLevers: { E: 0, T: 0, H: 0, G: 0, F: 0 },
+    Tqueue: new Array(PARAMS.treatment.queueQuarters).fill(0),
+    consistencyQuarters: 0,
+    lastGChangeQuarter: -PARAMS.levers.reversalWindow,
+    lastGDirection: 0,
+    pendingBlocPenalty: 0,
+    pendingTrustPenalty: 0,
+    people,
+    forecasts: [],
+    history: [],
+  };
+}
+
+/* Apply a new lever setting, with the §5 coherence and reversal penalties. */
+function setLevers(st, next){
+  const L = PARAMS.levers;
+  const cur = st.levers;
+  const changed = ["E","T","H","G","F"].some(k => next[k] !== cur[k]);
+  const dG = next.G - cur.G;
+
+  if (Math.abs(dG) > 1){
+    st.pendingTrustPenalty += L.coherenceTrustPenalty;
+    st.pendingBlocPenalty  += L.coherenceBlocPenalty;
+  }
+  if (dG !== 0){
+    const reversal = st.lastGDirection !== 0
+      && Math.sign(dG) === -st.lastGDirection
+      && (st.q - st.lastGChangeQuarter) < L.reversalWindow;
+    if (reversal){
+      st.pendingTrustPenalty += L.reversalTrustPenalty;
+      st.pendingBlocPenalty  += L.reversalBlocPenalty;
+    }
+    if (dG > 0) st.setupCharges = (st.setupCharges || 0) + dG * L.setupG;
+    st.lastGChangeQuarter = st.q;
+    st.lastGDirection = Math.sign(dG);
+  }
+  st.consistencyQuarters = changed ? 0 : st.consistencyQuarters;
+  st.reversalThisQuarter = st.pendingTrustPenalty > 0;
+  st.levers = Object.assign({}, next);
+}
+
+/* ==========================================================================
+   One quarter, in the fixed evaluation order of §7
+   ========================================================================== */
+
+function stepQuarter(st){
+  const p = PARAMS;
+  const L = st.levers, Lp = st.prevLevers;
+  const E = L.E, T = L.T, H = L.H, F = L.F;
+  const g = L.G / p.levers.supplyTiers[p.levers.supplyTiers.length - 1];
+  const gPrev = Lp.G / p.levers.supplyTiers[p.levers.supplyTiers.length - 1];
+  const dE = E - Lp.E, dH = H - Lp.H, dT = T - Lp.T, dG = g - gPrev;
+  const before = { W: st.W, incarcerated: st.incarcerated, records: st.records };
+  st.q += 1;
+
+  /* -- 1. price and margin (7.1) -------------------------------------- */
+  const pr = p.price;
+  const Pstar = pr.base * (1 + pr.enforcementLift * E) * (1 - pr.regulationCut * g)
+    * Math.pow(pr.K0 / Math.max(st.Kill + st.Kleg, pr.capacityFloor), pr.scarcityExponent);
+  st.P += pr.adjust * (Pstar - st.P);
+  const riskCost = pr.riskCostCoef * E * (1 - g);
+  st.margin = (st.P / pr.base) * (1 - riskCost);
+
+  /* -- 2. capacity, then M (7.2) --------------------------------------- */
+  const cp = p.capacity;
+  const KillStar = pr.K0 * Math.pow(st.margin / pr.margin0, cp.entryExponent);
+  st.Kill += cp.entryAdjust * (KillStar - st.Kill);
+  const interdiction = cp.interdictionCoef * Math.max(0, dE) * st.Kill;
+  st.Kill = Math.max(st.Kill - interdiction, cp.killFloor);
+  const tierMax = p.levers.supplyTiers[p.levers.supplyTiers.length - 1];
+  const gLegal = Math.max(0, (L.G - cp.legalSupplyTier) / (tierMax - cp.legalSupplyTier));
+  const KlegStar = cp.legTarget * Math.pow(gLegal, cp.legExponent);
+  st.Kleg += cp.legAdjust * (KlegStar - st.Kleg);
+  st.M = st.Kill / Math.max(st.Kill + st.Kleg, cp.shareFloor);
+
+  /* -- 3. potency and variance (7.3) ------------------------------------ */
+  const po = p.potency;
+  const PhiStar = 1 + po.enforcementLift * E * (1 - g) - po.regulationCut * g;
+  st.Phi += (PhiStar > st.Phi ? po.adjustUp : po.adjustDown) * (PhiStar - st.Phi);
+  st.PhiVar = po.varianceCoef * st.Phi * (1 - po.varianceRegCut * g)
+            * (1 - po.varianceHarmCut * H);
+
+  /* -- 4. norms (7.4a) --------------------------------------------------- */
+  const nm = p.norms;
+  const normStar = 1
+    + nm.regulationLift * g
+    + nm.contagion * Math.max(0, st.U / st.U0 - 1)
+    + nm.moralisedSuppression * Math.min(F, 0)
+    - nm.enforcementDeterrent * E * (1 - g);
+  st.norm += nm.adjust * (normStar - st.norm);
+
+  /* -- 5. prevalence (7.4b) ---------------------------------------------- */
+  const pv = p.prevalence;
+  const initiation = st.U0 * pv.initiationRate
+    * Math.pow(st.P / pr.base, pv.epsilonInit)
+    * Math.pow(st.norm, pv.normExponent)
+    * (1 - pv.arrestDeterrence * E * (1 - g));
+  const cessation = st.U * pv.cessationRate;
+  st.U += initiation - cessation;
+
+  /* -- 5b. dependence inflow (7.4c), death outflow deferred -------------- */
+  const dp = p.dependence;
+  const qtyIndex = Math.pow(st.P / pr.base, dp.epsilonQty);
+  const inflow = Math.max(0, st.U - st.D) * dp.inflowRate
+               * Math.pow(st.norm, dp.inflowNormExponent);
+  const outflow = st.Dtreat * st.R * dp.treatedOutflow + st.D * dp.spontaneousOutflow;
+  st.D += inflow - outflow;
+
+  /* -- 6. treatment (7.5) ------------------------------------------------ */
+  const tr = p.treatment;
+  st.Tqueue.push(T);
+  const Tlagged = st.Tqueue.shift();
+  const capacity = (tr.capacityBase + tr.capacityPerT * Tlagged) * tr.capacityUnit;
+  const meanDiscount = mean(p.person.roster.map(a => a.discountRate));
+  const meanStigma = mean(p.person.roster.map(a => a.stigmaSensitivity));
+  const frameMult = tr.frameMult[String(F)];
+  const presentationRate = tr.presentationBase
+    * Math.exp(-meanDiscount * st.W / p.sim.weeksPerQuarter)
+    * frameMult
+    * (1 + tr.regulationEase * g)
+    * (tr.trustFloor + tr.trustGain * st.trust)
+    * (F < 0 ? 1 - tr.moralisedStigmaBlock * meanStigma : 1);
+  const seeking = st.D * presentationRate;
+  const Wstar = Math.max(0, tr.waitScale * seeking / Math.max(capacity, 1));
+  st.W += tr.waitAdjust * (Wstar - st.W);
+  st.R = clamp(tr.retentionBase + tr.retentionPerT * T
+    + (F > 0 ? tr.retentionMedicalised : 0)
+    - (F < 0 ? tr.retentionMoralised : 0), tr.retentionMin, tr.retentionMax);
+  const admissions = Math.min(seeking, Math.max(0, capacity - st.Dtreat));
+  const exits = st.Dtreat * (st.R * dp.treatedOutflow + (1 - st.R) * tr.dropoutRate);
+  st.Dtreat = Math.max(0, Math.min(st.Dtreat + admissions - exits, capacity));
+
+  /* -- 7. deaths (7.6), from the post-inflow D --------------------------- */
+  const de = p.deaths;
+  const Duntreated = Math.max(st.D - st.Dtreat, 0);
+  st.deathsPrev = st.deaths;
+  st.deaths = Duntreated * de.baseRate
+    * (st.PhiVar / po.varianceRef)
+    * (1 - de.harmReductionCut * H)
+    * (1 - de.treatedCoverageCut * st.Dtreat / Math.max(st.D, 1));
+
+  /* -- 8. apply deaths ---------------------------------------------------- */
+  st.D = Math.max(0, st.D - st.deaths);
+  st.deathsCum += st.deaths;
+
+  /* -- 9. crime, incarceration, records (7.7) ----------------------------- */
+  const cr = p.crime;
+  st.crime = cr.base * (Duntreated / st.Duntreated0)
+    * Math.pow(st.P / pr.base, cr.priceExponent) * qtyIndex
+    * (1 - cr.regulationCut * g);
+  const releases = st.incarcerated * cr.releaseRate;
+  st.incarcerated += cr.incarcerationCoef * E * st.U * (1 - g) - releases;
+  st.records += cr.recordsCoef * E * st.U * (1 - g);
+
+  /* -- fiscal ------------------------------------------------------------- */
+  const lv = p.levers;
+  const spend = lv.costE * E + lv.costT * T + lv.costH * H
+    + lv.incarcerationCostPerPerson * st.incarcerated
+    - lv.revenueG * g * (st.U / st.U0)
+    + (st.setupCharges || 0);
+  st.setupCharges = 0;
+  st.budget += lv.budgetPerQuarter - spend;
+
+  /* -- 10. constituencies and approval (7.8) ------------------------------ */
+  updateBlocs(st, { dE, dH, dT, dG, F, before });
+
+  /* -- 11. trust (7.9) ----------------------------------------------------- */
+  const tu = p.trust;
+  st.consistencyQuarters = Math.min(st.consistencyQuarters + 1, tu.consistencyWindow);
+  const consistencyGain = st.trust >= tu.consistencyCeiling ? 0
+    : tu.consistencyGain * (st.consistencyQuarters / tu.consistencyWindow);
+  st.trust = clamp(st.trust + consistencyGain
+    - st.pendingTrustPenalty
+    - tu.enforcementPenalty * E * (1 - g), tu.min, tu.max);
+  st.pendingTrustPenalty = 0;
+
+  /* -- 12. the twelve (§9) -------------------------------------------------- */
+  updatePeople(st, { E, T, H, F, g, capacity, frameMult });
+
+  st.S *= p.blocs.salienceDecay;
+  /* Deltas are quarter-on-quarter: a lever change seizes capacity once (§7.2)
+     and moves a bloc once (§7.8), not every quarter it stays raised. */
+  st.prevLevers = Object.assign({}, st.levers);
+  st.history.push(snapshot(st));
+  return st;
+}
+
+/* ---- §7.8 ---------------------------------------------------------------- */
+function updateBlocs(st, ctx){
+  const b = PARAMS.blocs, lv = PARAMS.levers;
+  const { dE, dH, dT, dG, F, before } = ctx;
+  const dW = st.W - before.W;
+  const dIncarcerated = st.incarcerated - before.incarcerated;
+  const dRecords = st.records - before.records;
+  const eventImpact = 0;            // media events are build-order step 10
+  const punitive = 0;               // ditto
+  const deficit = Math.max(0, -st.budget / b.deficitScale);
+  const overFloor = Math.max(0, (lv.deficitFloor - st.budget) / b.deficitScale);
+
+  let dCentre = -b.centre.crime * (st.crime - PARAMS.crime.base)
+    - b.centre.deficit * deficit
+    - eventImpact * (1 + st.S) * b.centre.event
+    - overFloor * lv.deficitPenaltyRate;   // compounding, past the deficit floor
+
+  let dProg = b.prog.deaths * (st.deathsPrev - st.deaths)
+      * (b.prog.salienceFloor + b.prog.salienceGain * st.S)
+    - b.prog.incarceration * (dIncarcerated / b.prog.personScale)
+    - b.prog.records * (dRecords / b.prog.personScale)
+    + b.prog.dG * (dG * PARAMS.levers.supplyTiers[PARAMS.levers.supplyTiers.length - 1])
+    - b.prog.dE * dE;
+
+  let dTrad = -b.trad.crime * (st.crime - PARAMS.crime.base)
+    - b.trad.dG * (dG * PARAMS.levers.supplyTiers[PARAMS.levers.supplyTiers.length - 1])
+    - b.trad.dH * dH
+    + (F < 0 ? b.trad.moralised : 0)
+    - (F > 0 ? b.trad.medicalised : 0)   // the frame they want, negated
+    - b.trad.prevalence * (st.U / st.U0 - 1) * b.prevalenceScale;
+
+  let dHealth = b.health.deaths * (st.deathsPrev - st.deaths)
+    - b.health.dW * dW
+    + b.health.dT * dT
+    + (F > 0 ? b.health.medicalised : 0)
+    - b.health.punitive * punitive;
+
+  const pen = st.pendingBlocPenalty;
+  st.pendingBlocPenalty = 0;
+  const rev = k => b.reversion * (b.baseline - st.blocs[k]);
+  st.blocs.centre = clamp(st.blocs.centre + dCentre + rev("centre") - pen, b.min, b.max);
+  st.blocs.prog   = clamp(st.blocs.prog   + dProg   + rev("prog")   - pen, b.min, b.max);
+  st.blocs.trad   = clamp(st.blocs.trad   + dTrad   + rev("trad")   - pen, b.min, b.max);
+  st.blocs.health = clamp(st.blocs.health + dHealth + rev("health") - pen, b.min, b.max);
+  st.A = b.weights.centre * st.blocs.centre + b.weights.prog * st.blocs.prog
+       + b.weights.trad * st.blocs.trad + b.weights.health * st.blocs.health;
+}
+
+/* ---- §9 ------------------------------------------------------------------ */
+function updatePeople(st, ctx){
+  const pp = PARAMS.person;
+  const { E, T, H, F, g, capacity, frameMult } = ctx;
+  const prevStability = st.people.map(x => x.stability);
+
+  for (const person of st.people){
+    const a = person.attr;
+    if (person.state === "deceased"){ person.history.push(0); continue; }
+
+    /* escalation: the psychological channel by which a permissive norm reaches
+       the people most sensitive to it (§9.1, Aisha and Callum) */
+    person.escalation = clamp(person.escalation
+      + pp.escalationRate * a.normSensitivity * (st.norm - 1),
+      0, pp.escalationMax);
+
+    /* records: cumulative, irreversible, invisible in the aggregates (§7.7) */
+    person.recordExposure += Math.max(0, E * (1 - g) - pp.recordExposureFloor)
+                           * a.arrestExposure;
+    if (!person.record && person.recordExposure >= pp.recordThreshold) person.record = true;
+
+    /* custody */
+    if (person.state === "incarcerated"){
+      person.quartersIncarcerated += 1;
+      if (person.quartersIncarcerated >= pp.releaseAfterQuarters){
+        person.state = "precarious"; person.quartersIncarcerated = 0;
+      }
+    } else if (st.rng() < pp.arrestHazardBase * E * (1 - g) * a.arrestExposure){
+      person.state = "incarcerated"; person.quartersIncarcerated = 0;
+    }
+
+    /* presentation to treatment — per-person, discounted against W (§9) */
+    if (person.state !== "in-treatment" && person.state !== "incarcerated"
+        && a.dependent && st.Dtreat < capacity){   // only dependence presents
+      const pPresent = pp.presentationBase
+        * Math.exp(-a.discountRate * st.W / PARAMS.sim.weeksPerQuarter)
+        * frameMult
+        * (1 + PARAMS.treatment.regulationEase * g)
+        * (PARAMS.treatment.trustFloor + PARAMS.treatment.trustGain * st.trust)
+        * a.serviceReach
+        * (1 - a.stigmaSensitivity * (F < 0 ? 1 : 0));
+      if (st.rng() < pPresent){ person.state = "in-treatment"; person.quartersInTreatment = 0; }
+    }
+
+    /* stability target */
+    let target;
+    if (a.carerOf !== null && a.carerOf !== undefined){
+      const sib = prevStability[a.carerOf];
+      target = pp.stabilityMax - pp.carerWeight * (pp.stabilityMax - sib);
+    } else if (a.outOfScope > 0){
+      target = pp.stabilityBase
+        + pp.wTrajectory * a.trajectory
+        + pp.wTreatmentFunding * T
+        - pp.wCapacityCrowding * (st.W / PARAMS.sim.weeksPerQuarter)
+        + pp.wSupport * (a.socialSupport - pp.supportMid)
+        + (person.state === "in-treatment" ? pp.wInTreatment * st.R * a.treatmentBenefit : 0);
+    } else {
+      target = pp.stabilityBase
+        + pp.wTrajectory * a.trajectory
+        + pp.wSupport * (a.socialSupport - pp.supportMid)
+        + (person.state === "in-treatment" ? pp.wInTreatment * st.R * a.treatmentBenefit : 0)
+        + pp.wHarmReduction * H * a.riskExposure
+        - pp.wVariance * a.varSensitivity * (st.PhiVar >= pp.varRef
+            ? (st.PhiVar / pp.varRef - 1)
+            : pp.wVarianceRelief * (st.PhiVar / pp.varRef - 1))
+        - pp.wPrice * Math.max(0, st.P / PARAMS.price.base - 1) * a.incomeDependence
+        - pp.wEscalation * person.escalation
+        + pp.wDeterrence * E * (1 - g) * a.deterrenceBenefit
+        - pp.wEnforcementHarm * E * (1 - g) * a.enforcementHarm
+        - pp.wRecord * (person.record ? 1 : 0) * a.recordSensitivity
+        - pp.wStigmaMoralised * a.stigmaSensitivity * (F < 0 ? 1 : 0)
+        + pp.wFrameMedicalised * a.stigmaSensitivity * (F > 0 ? 1 : 0)
+        + pp.wTrust * (st.trust - pp.trustRef) * (1 - a.serviceTrust)
+        + pp.wLegalSupply * a.legalSupplyBenefit * (st.Kleg / Math.max(st.Kill + st.Kleg, PARAMS.capacity.shareFloor))
+        + pp.wSupplyIncome * a.supplyIncome * (st.M - pp.marketShareRef)
+        - pp.wSupplyCollapse * a.supplyIncome * (st.levers.G >= pp.supplyCollapseTier ? 1 : 0)
+        - pp.wWait * (st.W / PARAMS.sim.weeksPerQuarter) * a.discountRate * (a.user ? 1 : 0);
+    }
+    target = clamp(target, pp.stabilityMin, pp.stabilityMax);
+    person.stability = clamp(person.stability + pp.adjust * (target - person.stability),
+                             pp.stabilityMin, pp.stabilityMax);
+
+    /* treatment tenure, recovery, relapse */
+    if (person.state === "in-treatment"){
+      person.quartersInTreatment += 1;
+      if (st.rng() < (1 - st.R) * pp.dropoutBase){
+        person.state = "precarious";
+      } else if (person.stability >= pp.recoveredStability
+                 && person.quartersInTreatment >= pp.recoveredMinQuarters){
+        person.state = "recovered";
+      }
+    } else if (person.state === "recovered"){
+      if (person.stability < pp.relapseStability) person.state = "precarious";
+    } else if (person.state !== "incarcerated"){
+      person.state = person.stability >= pp.stableThreshold ? "stable"
+                   : person.stability >= pp.crisisThreshold ? "precarious" : "crisis";
+    }
+
+    /* mortality — terminal and irreversible */
+    const hazard = pp.deathHazardBase
+      * (st.PhiVar / pp.varRef)
+      * a.riskExposure
+      * (1 - PARAMS.deaths.harmReductionCut * H)
+      * (person.state === "crisis" ? pp.deathHazardCrisis : 1)
+      * (person.state === "in-treatment" ? pp.deathHazardTreated : 1);
+    if (st.rng() < hazard){ person.state = "deceased"; person.stability = 0; }
+
+    person.history.push(person.stability);
+  }
+}
+
+function snapshot(st){
+  return {
+    q: st.q, P: st.P, Phi: st.Phi, PhiVar: st.PhiVar, margin: st.margin,
+    Kill: st.Kill, Kleg: st.Kleg, M: st.M, norm: st.norm,
+    U: st.U, D: st.D, Dtreat: st.Dtreat, W: st.W, R: st.R,
+    deaths: st.deaths, deathsCum: st.deathsCum, crime: st.crime,
+    incarcerated: st.incarcerated, records: st.records,
+    blocs: Object.assign({}, st.blocs), A: st.A, trust: st.trust,
+    budget: st.budget, S: st.S,
+    levers: Object.assign({}, st.levers),
+    people: st.people.map(p => ({ name: p.name, stability: p.stability,
+                                  state: p.state, record: p.record })),
+  };
+}
+
+/* ==========================================================================
+   Runner
+   ========================================================================== */
+
+/* config: { E, T, H, G, F } held constant, or a function (quarter) => config */
+function runSim(config, opts){
+  opts = opts || {};
+  const st = createState(opts.seed === undefined ? PARAMS.sim.defaultSeed : opts.seed);
+  const quarters = opts.quarters || PARAMS.sim.quarters;
+  const at = typeof config === "function" ? config : () => config;
+  for (let q = 1; q <= quarters; q++){
+    const want = at(q);
+    const next = Object.assign({}, st.levers, want);
+    if (["E","T","H","G","F"].some(k => next[k] !== st.levers[k])) setLevers(st, next);
+    stepQuarter(st);
+  }
+  return st;
+}
+
+/* Run a twelve-round schedule: one lever setting per cabinet round (§4.1). */
+function runRounds(schedule, opts){
+  opts = opts || {};
+  const st = createState(opts.seed === undefined ? PARAMS.sim.defaultSeed : opts.seed);
+  PARAMS.sim.roundQuarters.forEach((n, r) => {
+    const want = schedule[Math.min(r, schedule.length - 1)];
+    const next = Object.assign({}, st.levers, want);
+    if (["E","T","H","G","F"].some(k => next[k] !== st.levers[k])) setLevers(st, next);
+    for (let i = 0; i < n; i++) stepQuarter(st);
+  });
+  return st;
+}
+
+/* Did this person have a good ten years? (§14 tests 7 / 7b) */
+function personGood(person){
+  const o = PARAMS.outcome;
+  if (o.badStates.includes(person.state)) return false;
+  const window = person.history.slice(-o.goodWindowQuarters);
+  if (!window.length) return false;
+  return person.stability >= o.goodFinalStability && mean(window) >= o.goodMeanStability;
+}
+
+function outcomeReport(st){
+  return st.people.map(p => ({
+    name: p.name, state: p.state, record: p.record,
+    final: p.stability, meanLate: mean(p.history.slice(-PARAMS.outcome.goodWindowQuarters)),
+    good: personGood(p),
+  }));
+}
+
+/* Grid sweep over the lever space (§14 tests 7, 7b, 7c). */
+function sweep(opts){
+  opts = opts || {};
+  const seeds = opts.seeds || [PARAMS.sim.defaultSeed];
+  const results = [];
+  for (const E of PARAMS.levers.detents)
+  for (const T of PARAMS.levers.detents)
+  for (const H of PARAMS.levers.detents)
+  for (const G of PARAMS.levers.supplyTiers)
+  for (const F of PARAMS.levers.frames){
+    const cfg = { E, T, H, G, F };
+    for (const seed of seeds){
+      const st = runSim(cfg, { seed });
+      results.push({ cfg, seed, st });
+    }
+  }
+  return results;
+}
+
+/* Longest run of consecutive quarters with all four blocs above threshold. */
+function longestAllBlocRun(st){
+  const t = PARAMS.blocs.satisfiedThreshold;
+  let best = 0, run = 0, bestEnd = 0;
+  for (const h of st.history){
+    const all = h.blocs.centre > t && h.blocs.prog > t && h.blocs.trad > t && h.blocs.health > t;
+    run = all ? run + 1 : 0;
+    if (run > best){ best = run; bestEnd = h.q; }
+  }
+  return { best, bestEnd };
+}
+
+const WARD = {
+  PARAMS, createState, setLevers, stepQuarter, runSim, runRounds, snapshot,
+  personGood, outcomeReport, sweep, longestAllBlocRun, mulberry32,
+  selfTest(){
+    const st = runSim({ E: 0, T: 0, H: 0, G: 0, F: 0 });
+    console.table(outcomeReport(st));
+    return st;
+  },
+};
+if (typeof window !== "undefined") window.WARD = WARD;
+if (typeof module !== "undefined" && module.exports) module.exports = WARD;
+</script>
+</body>
+</html>
