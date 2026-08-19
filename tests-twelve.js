@@ -198,6 +198,15 @@
   function suite(P, label, emit) {
     var TH = THRESHOLDS;
     var RESULTS = [];
+
+    /* Step 6's attribution layer is switched off for the sweep. It
+       carries a shadow run per lever change, which is what makes the
+       amber rule read a real quantity rather than a stipulated one —
+       and which costs about six times a bare run. Tests 7/7b/7c read
+       ten-year outcomes and never read a chain, and the attribution
+       provably changes no state variable, so the sweep and the
+       round-plan search run without it. */
+    P = W.deepMerge(P, { delayed: { track: false } });
     var say = emit || function (s) { if (typeof console !== 'undefined') console.log(s); };
     function rule(ch) { say(new Array(75).join(ch || '-')); }
     function head(s) { say(''); rule('='); say(s); rule('='); }
