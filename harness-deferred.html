@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WARD — deferred acceptance tests (Test 5, coherence)</title>
+<style>
+  html { background: #12161A; color: #EDEFF1; }
+  body { font: 13px/1.6 "Roboto Mono","IBM Plex Mono",ui-monospace,monospace;
+         margin: 0; padding: 32px 40px; }
+  h1 { font-size: 15px; letter-spacing: .12em; text-transform: uppercase;
+       font-weight: 600; color: #9BA5AE; margin: 0 0 4px; }
+  p  { color: #9BA5AE; max-width: 62ch; }
+  code { color: #EDEFF1; }
+  pre { white-space: pre-wrap; overflow-x: auto; border-top: 1px solid #2A3138;
+        border-bottom: 1px solid #2A3138; padding: 12px 0; }
+</style>
+</head>
+<body>
+
+<h1>WARD — deferred acceptance tests</h1>
+<p>Two open items from the step 1–3 verification, written as tests now and
+intended to be re-run after the build steps they depend on exist.</p>
+<p><strong>TEST 5</strong> (§14) — immediate <code>G=4</code> in Q1 does not
+fell the administration. Traditional collapses to ~23 by Q16 as required, but
+Centre rises on the instant crime benefit of regulation and <code>A</code>
+holds near 50. The three candidate causes — media events (build step 10), a
+coherence penalty that persists, a crime benefit that arrives with a lag — are
+separated into their own assertions, so the suite says which fix closed the gap.</p>
+<p><strong>TEST C</strong> — coherence detection (§5) is implemented but
+untested: it fires only on lever changes, and tests 1–4 hold levers constant
+after Q1. Every path here changes levers only at a §4.1 round boundary, which
+is what “more than one tier in a single round” actually means.</p>
+<p><code>PENDING</code> marks an assertion that does not hold now <em>by
+design</em>: it is the acceptance criterion for a step that has not been built.
+A <code>PENDING</code> turning <code>PASS</code> is the completion signal.
+<code>FAIL</code> means a regression.</p>
+<p>Run under both parameter sets, as <code>harness.html</code> does. Under
+<em>spec literal</em> the passive path already fails Test 1 — that is the
+step-2 calibration issue documented in <code>engine.js</code>, not a new
+regression, and it is why the Test 5 guards fail there too.</p>
+<pre id="out"></pre>
+
+<script src="engine.js"></script>
+<script src="tests-deferred.js"></script>
+<script>
+(function (W, D) {
+  'use strict';
+  var LOG = [];
+  function say(s) {
+    LOG.push(s == null ? '' : String(s));
+    if (typeof console !== 'undefined') console.log(s);
+  }
+
+  var A = D.suite(W.PARAMS, 'SPEC LITERAL', say);
+  var B = D.suite(W.withCalibration(), 'STEP-2 CALIBRATED', say);
+
+  say('');
+  say(new Array(75).join('='));
+  say('BOTH PARAMETER SETS');
+  say(new Array(75).join('='));
+  [A, B].forEach(function (s) {
+    say('  ' + s.label + ':  PASS ' + s.counts.PASS + '   FAIL ' + s.counts.FAIL +
+        '   PENDING ' + s.counts.PENDING);
+  });
+
+  if (typeof document !== 'undefined') {
+    document.getElementById('out').textContent = LOG.join('\n');
+  }
+})(WARD, WARD_DEFERRED);
+</script>
+</body>
+</html>
